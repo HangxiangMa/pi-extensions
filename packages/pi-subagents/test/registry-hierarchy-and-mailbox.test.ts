@@ -162,10 +162,10 @@ test("AgentRegistry bounds mailbox input and reports rejected child turns to the
 	);
 	const other = await registry.spawn({ agent: "explorer", task: "other", cwd: process.cwd() });
 	await registry.wait(other.id, 100);
-	await assert.rejects(
-		() => registry.sendMessage(child.id, "message", other.id),
-		/cannot cross agent trees/,
-	);
+	const crossTree = await registry.sendMessage(child.id, "message", other.id);
+	assert.equal(crossTree.senderId, other.id);
+	assert.equal(crossTree.recipientId, child.id);
+	await registry.readMessages(child.id, true);
 	const bounded = await registry.sendMessage(child.id, "x".repeat(200));
 	assert.ok(Buffer.byteLength(bounded.content, "utf8") <= 64);
 	assert.match(bounded.content, /truncated/);

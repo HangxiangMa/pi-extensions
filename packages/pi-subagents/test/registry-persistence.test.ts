@@ -260,6 +260,47 @@ test("AgentPersistence atomically saves, restores, redacts, deletes, and quarant
 	);
 });
 
+test("AgentPersistence preserves additive task identity and restores legacy identity through the registry", async () => {
+	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-task-path-state-"));
+	const persistence = new AgentPersistence("session", { stateDir: dir });
+	const futureRecord = {
+		...record({ taskName: "research", taskPath: "/root/research" }),
+		futureMetadata: { mode: "preserve" },
+	};
+	await persistence.save([futureRecord]);
+	const restored = persistence.load()[0] as
+		| (ReturnType<typeof record> & { futureMetadata?: { mode?: string } })
+		| undefined;
+	assert.equal(restored?.taskName, "research");
+	assert.equal(restored?.taskPath, "/root/research");
+	assert.equal(restored?.futureMetadata?.mode, "preserve");
+
+	writeFileSync(
+		persistence.filePath,
+		JSON.stringify({
+			version: 1,
+			updatedAt: Date.now(),
+			agents: [
+				{
+					id: "legacy-no-path",
+					agent: "worker",
+					state: "completed",
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+					cwd: process.cwd(),
+					history: [],
+				},
+			],
+		}),
+	);
+	const legacy = persistence.load();
+	assert.equal(legacy[0]?.taskPath, undefined);
+	const registry = new AgentRegistry(async () => ({ output: "", exitCode: 0 }));
+	registry.restore(legacy);
+	assert.match(registry.get("legacy-no-path")?.taskPath ?? "", /^\/root\/agent_/u);
+	rmSync(dir, { recursive: true, force: true });
+});
+
 test("AgentPersistence trims history instead of dropping a root with pending completion", async () => {
 	const dir = mkdtempSync(path.join(os.tmpdir(), "pi-subagent-completion-priority-"));
 	const persistence = new AgentPersistence("session", { stateDir: dir });

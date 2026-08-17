@@ -17,6 +17,8 @@ interface CompletionMetadata {
 	runId: string;
 	generation: number;
 	agentId: string;
+	taskPath?: string;
+	recipientPath?: string;
 	agent: string;
 	task: string;
 	state: string;
@@ -276,6 +278,8 @@ function completionMetadata(completion: AgentTurnCompletion): CompletionMetadata
 		runId: completion.runId,
 		generation: completion.generation,
 		agentId: completion.agent.id,
+		...(completion.agent.taskPath ? { taskPath: completion.agent.taskPath } : {}),
+		...(completion.recipientPath ? { recipientPath: completion.recipientPath } : {}),
 		agent: completion.agent.agent,
 		task: sanitizeCompletionLine(completion.task, 256) || "(unknown task)",
 		state: completion.agent.state,
@@ -310,6 +314,8 @@ export function buildDetachedCompletionMessage(completion: AgentTurnCompletion):
 			`Run ID: ${completion.runId}`,
 			`Generation: ${completion.generation}`,
 			`Agent ID: ${completion.agent.id}`,
+			...(completion.agent.taskPath ? [`Agent Path: ${completion.agent.taskPath}`] : []),
+			...(completion.recipientPath ? [`Recipient Path: ${completion.recipientPath}`] : []),
 			`Agent: ${agentName}`,
 			`Task: ${task}`,
 			`State: ${completion.agent.state}`,

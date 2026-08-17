@@ -29,6 +29,9 @@ One ordinary async worker requires named non-overlapping main-agent work that st
 - Uses Pi-native tool rows throughout; blocking and consultation calls add bounded custom live activity.
 - Bounds JSON lines, captured messages, stderr, final output, chain substitution, and fan-in context.
 - Enforces a recursion-depth guard and deterministic process-group termination.
+- Gives every retained agent both an opaque durable `agentId` and a session-scoped canonical `taskPath`, while preserving ID compatibility across lifecycle and inspection tools.
+- Gives retained children authenticated `subagent_peer_send` and `subagent_peer_list` tools for bounded queue-only communication with `/root` or any retained peer in the same session.
+- Routes nested completions to the direct retained parent first, while top-level completions continue through the root completion broker.
 - Provides addressable stateful agents with follow-up, consolidated mailbox/management actions, idempotent spawn retries, context selection and preview, versioned structured outcomes, and persistence.
 - Publishes built-in and custom agent capability manifests, then records the executor-owned `ExecutionPlan` that resolves requested authority to effective tools, model, thinking, timeout, transport, trust, and workspace controls.
 - Runs explicit dependency workflows through a persistent `WorkItem` ledger, dependency-aware scheduler, declared scope-conflict checks, artifact provenance, stale-result invalidation, and bounded overall deadlines.
@@ -566,7 +569,7 @@ Legacy v1 and v2 records without acceptance fields retain their prior completed 
 
 ## 🔁 Stateful agents
 
-Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId`, and later injects a bounded `pi-subagent-completion` custom message. Every turn receives an executor-owned `runId`, monotonically increasing agent-local generation, and unique `completionId`. The terminal completion is persisted before delivery, simultaneous completions are batched, and the broker allows at most one in-flight root wake until that parent turn starts.
+Stateful lifecycle tools are available by default. `subagent_spawn` is detached: it schedules work, returns immediately with an opaque `agentId` plus canonical `taskPath`, and later delivers a bounded completion to its intended parent. Every turn receives an executor-owned `runId`, monotonically increasing agent-local generation, and unique `completionId`. The terminal completion and recipient are persisted before delivery, simultaneous root completions are batched, and the root broker allows at most one in-flight wake until that parent turn starts.
 In TUI mode, completion messages show a compact task and payload summary while collapsed; use the configured tool-output expansion action (`Ctrl+O` by default) to show or hide the complete message globally.
 
 Detached work follows a non-polling policy.
@@ -586,7 +589,7 @@ Simple and immediate critical-path work should stay in the main agent.
 - `"next-turn"` (default) preserves the previous behavior: use `deliverAs: "steer"` with `triggerTurn: false`. An active root can consume completion naturally; an idle root is not awakened.
 - `"auto-resume"` holds completion while the root is active, then requests one synthesis turn after the parent settles when no user or extension messages are already pending. Simultaneous completions share that turn, active work is not interrupted, and pending input suppresses the automatic wake.
 
-The bounded persisted completion outbox provides ordered at-least-once delivery across process restart without replaying the child turn. When state must be reduced to its storage bound, persistence drops roots without pending completions first and trims old history rather than discarding an outbox-owned root. A completion is acknowledged only after parent context assembly observes its exact `completionId`; an injection that returns synchronously but never reaches context remains pending for retry. If the process exits after context assembly but before acknowledgement is persisted, the same ID can be delivered again and consumers must deduplicate it. Auto-resume wake admission remains best-effort because Pi's custom-message API is fire-and-forget, but an unacknowledged terminal completion itself remains available for redelivery on the next start of the owning session. Transient terminal-persistence failures retry with bounded exponential backoff and keep the run pending; shutdown cancels retry waits and reports a final persistence failure instead of silently resolving unsaved work.
+The bounded persisted completion outbox provides ordered at-least-once delivery across process restart without replaying the child turn. A top-level completion targets `/root`; a nested completion enters the direct retained parent's mailbox and is not duplicated into the root transcript. If the direct parent cannot own delivery, routing walks toward the nearest live retained ancestor and uses `/root` only as the final fallback. An idle parent remains asleep, and inspection exposes its unread and pending-completion counts until a later turn consumes the envelope. When state must be reduced to its storage bound, persistence drops roots without pending completions first and trims old history rather than discarding an outbox-owned root. A completion is acknowledged only after the intended recipient context observes its exact `completionId`; an injection that returns synchronously but never reaches context remains pending for retry. If the process exits after context assembly but before acknowledgement is persisted, the same ID can be delivered again and consumers must deduplicate it. Auto-resume applies only to `/root`; nested delivery never silently starts the parent. Transient terminal-persistence failures retry with bounded exponential backoff and keep the run pending; shutdown cancels retry waits and reports a final persistence failure instead of silently resolving unsaved work.
 
 The default `subprocess` transport preserves compatibility: each turn starts a fresh isolated `pi --mode json -p --no-session` child and receives sanitized, bounded history.
 Pi registers every Subagents tool and command during startup, but loads blocking execution, manager UI, inspection work, and the selected detached transport implementation only on first use.
@@ -665,7 +668,7 @@ This avoids lifecycle-driven tool-schema churn and preserves a stable provider p
 
 | Tool | Purpose |
 | --- | --- |
-| `subagent_spawn` | Start detached work with optional task-selected thinking and retained timeout, exact-retry `idempotencyKey`, and `text`, `structured-v1`, or `structured-v2` result format; return an opaque `agentId` immediately and deliver completion asynchronously. |
+| `subagent_spawn` | Start detached work with an optional canonical `taskName`, task-selected thinking and retained timeout, exact-retry `idempotencyKey`, and `text`, `structured-v1`, or `structured-v2` result format; return both `agentId` and `taskPath` immediately and deliver completion asynchronously. |
 | `subagent_send` | Send follow-up work with an optional one-turn timeout override and trigger a new turn on a reusable agent; semantic skew requires explicit `revalidate: true`, and shared-workspace concurrency is allowed by default. |
 | `subagent_manage` | Use `"interrupt"` to retain an agent after aborting active work or `"close"` to release it; both actions accept optional `subtree`. Use `subagent_inspect` for all list and detail operations. |
 | `subagent_mailbox` | Use `action: "send"` for queue-only messages that do not start a turn, or `"read"` to read and optionally acknowledge unread messages. |
@@ -693,7 +696,36 @@ Active turns are FIFO-limited by `maxActiveTurns`; excess retained work remains 
 `maxAgents` separately bounds running, queued, and idle records.
 `maxChildrenPerAgent` bounds direct children, while `maxDepth` counts nested levels below a depth-zero root.
 `maxStoredAgents` bounds sanitized records persisted per session and does not increase live runtime capacity.
-`parentId` creates a bounded child relationship; subtree interrupt and close operate child-first.
+`parentId` accepts either an opaque ID or canonical path and creates a bounded child relationship; subtree interrupt and close operate child-first.
+
+### Canonical paths and retained peer communication
+
+`agentId` remains the durable compatibility key.
+Every live retained record also has a session-scoped path under `/root`, such as `/root/research` or `/root/research/tests`.
+Supply `taskName` to choose the final segment.
+Segments accept lowercase ASCII letters, digits, and underscores; `root`, `.`, `..`, slashes, empty values, and names longer than 128 characters are rejected.
+An omitted name receives a deterministic privacy-safe `agent_<hash>` fallback, including for restored legacy records.
+A path must be unique while its record is retained and not closed, and the same path may be reused after close.
+
+Root lifecycle and inspection fields named `agentId` continue to accept opaque IDs and now also resolve absolute canonical paths.
+A peer target without a leading slash resolves below the authenticated sender's path, while `/root` and paths beginning with `/root/` are absolute.
+Use an opaque ID when addressing historical closed records because a closed path is no longer reserved.
+
+Retained child sessions receive two package-owned tools:
+
+- `subagent_peer_send` queues one bounded message for `/root` or another retained peer and never accepts a sender field.
+- `subagent_peer_list` returns only bounded ID, path, agent-name, and lifecycle metadata for the current session.
+
+Messages can cross structural agent trees because one registry is one communication namespace.
+A running retained target may receive the persisted envelope through its active transport; an idle target remains asleep and consumes the message on its next turn.
+Message IDs and optional deduplication keys make retry at-least-once, so recipients must tolerate seeing the same exact ID again after an acknowledgement persistence failure.
+Process children use an authenticated loopback JSONL bridge.
+Its random credential is bound to one retained process generation, captured and removed from the child environment before model tools run, never persisted or rendered, and revoked on release, replacement, or shutdown.
+The broker bounds frames, connections, handshakes, message text, and response text.
+If a transport cannot accept a live push, the durable mailbox remains the fallback rather than starting another turn.
+
+To roll back model guidance or callers, omit `taskName`, keep addressing agents by `agentId`, and avoid the child peer tools.
+Older records require no manual migration because missing paths and recipients are reconstructed deterministically under the unchanged state version.
 
 ### Migrating from the previous seven-tool lifecycle surface
 
@@ -715,6 +747,7 @@ A spawn can request a thinking level explicitly:
 ```json
 {
   "agent": "explorer",
+  "taskName": "concurrency_analysis",
   "task": "Analyze the cross-package concurrency failure and identify the safest fix",
   "thinkingLevel": "high"
 }
@@ -727,6 +760,7 @@ An exact retry can use a bounded session-owned idempotency key:
 ```json
 {
   "agent": "worker",
+  "taskName": "approved_change",
   "task": "Implement the approved change",
   "idempotencyKey": "approved-change-1"
 }
@@ -762,7 +796,7 @@ Stateful execution uses a transport boundary:
 - `in-process` uses only public Pi SDK APIs: `createAgentSessionServices()`, `createAgentSessionFromServices()`, `SessionManager.inMemory()`, and normal session lifecycle methods. It isolates conversation/tool selection, not memory or crashes; child failures share the parent Node.js process.
 - `rpc` uses strict bounded JSONL over one lazy child process per active retained agent. A `get_state` response proves readiness, prompt response means accepted only, and `agent_settled` is the completion boundary after retry or compaction.
 - `auto` selects one transport before launch and retains the choice for that agent's runtime lifetime. It never retries through another transport after startup or accepted work.
-- In-process and RPC child resource loading disables extensions to prevent recursive `pi-subagents` loading and duplicate extension side effects while retaining trust-eligible context/skill resources and the selected agent prompt. The compatibility subprocess path retains its recursion-depth guard and configured tool behavior. Transports receive the same resolved target-trust boolean through their public SDK or explicit CLI trust controls.
+- In-process and RPC child resource loading disables user and project extensions to prevent recursive `pi-subagents` loading and duplicate extension side effects while retaining trust-eligible context/skill resources and the selected agent prompt. All transports add only the package-owned peer bridge and its two communication tools; the bridge does not add filesystem, shell, model, network-destination, or user-extension authority. The compatibility subprocess path retains its recursion-depth guard and configured execution tools. Transports receive the same resolved target-trust boolean through their public SDK or explicit CLI trust controls.
 - Agent model strings use Pi core's CLI resolver, including provider/model patterns, fuzzy matching, custom provider model IDs, and `:<thinking>` suffixes. Thinking level and built-in tool allow-list overrides are applied when the child is created. Parent model/thinking changes are snapshotted for subsequently created children; an existing child keeps its own session configuration.
 - Extension/custom tool names are rejected by in-process and RPC v1 before child creation; automatic mode selects `subprocess` for them, and permissions are never silently widened.
 - Timeout, parent abort, close, expiry, and session shutdown abort/dispose owned child sessions or process groups. A child that does not settle after abort grace is discarded rather than reused.
@@ -786,11 +820,11 @@ Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; 
 ## 📜 Compatibility and failure contract
 
 Existing accepted `subagent` payload shapes remain unchanged.
-`subagent_spawn` adds optional `idempotencyKey` and `resultFormat` fields without changing omitted behavior.
+`subagent_spawn` adds optional `taskName`, `idempotencyKey`, and `resultFormat` fields without changing omitted behavior.
 `allowConcurrentWrites` remains accepted by `subagent_spawn` and `subagent_send` as a deprecated no-op so stored or resumed calls remain valid.
 Spawn request identity continues to include its submitted value for exact-retry compatibility.
 Older releases do not recognize `stateful.transport: "rpc"` or `"auto"`; change the value to `"subprocess"` and reload before downgrading.
-Retained records remain transport-neutral, and older readers ignore the additive idempotency and context-footprint fields while the state version remains compatible.
+Retained records remain transport-neutral, and older readers ignore the additive task identity, completion-recipient, idempotency, and context-footprint fields while the state version remains compatible.
 The `tasks` schema now advertises the absolute 64-item safety bound, while the effective `blocking.maxParallelTasks` value may be lower.
 The intentional compatibility change is that an external target without saved trust is rejected by the new default `cwdPolicy.delegation: "trusted-targets"`; set the user-owned policy to `"anywhere"` to restore the preceding target flexibility.
 
@@ -1014,7 +1048,7 @@ Treat project-local agent prompts like executable project configuration: only en
 
 Stateful records are stored as versioned mode-0600 JSON under `~/.pi/agent/pi-subagents-state/` (or the configured Pi agent directory).
 Explicit blocking-workflow snapshots use separate mode-0600 files under `~/.pi/agent/pi-subagents-workflows/`, retain at most 64 workflows per session for 30 days, and are available only through current-session workflow inspection.
-Records contain sanitized logical history, never process IDs or credentials.
+Records contain sanitized logical history, canonical task paths, peer envelopes, and pending recipient metadata, but never process IDs, broker sockets, or communication credentials.
 Corrupt or unsupported state is quarantined, completed and actionable terminal outcomes are preserved, in-flight records restore as `interrupted`, and no prior side effect is automatically resumed.
 Retained follow-ups compare a privacy-safe hashed semantic snapshot before model work; incompatible resource changes require explicit `revalidate: true`, while unknown snapshot versions fail closed.
 Snapshots hash agent manifests, prompts, effective tools, model/thinking, transport, trust, Git tracked and untracked state, and bounded user/project skill and prompt resources without persisting their contents.
@@ -1047,7 +1081,13 @@ packages/pi-subagents/
 │   ├── rpc-turn-capture.ts       # RPC evidence capture, usage, and budget events
 │   ├── auto-transport.ts         # Deterministic preflight transport routing
 │   ├── transport-types.ts        # Bounded pi-subagents:v1 progress and telemetry contract
-│   ├── completion-delivery.ts    # Completion batching and optional idle-root wake
+│   ├── completion-delivery.ts    # Top-level completion batching and optional idle-root wake
+│   ├── completion-routing.ts     # Direct-parent and live-ancestor recipient selection
+│   ├── task-path.ts              # Canonical retained-agent task identity and resolution
+│   ├── peer-communication.ts     # Session peer routing and authenticated loopback broker
+│   ├── peer-transport.ts         # Child transport bridge wiring and ephemeral credentials
+│   ├── child-peer-tools.ts       # Child-only peer tools and context acknowledgements
+│   ├── child-peer-bridge.ts      # Explicit process-child extension entrypoint
 │   ├── admission-policy.ts       # Audit-only deterministic delegation admission
 │   ├── capability-grant.ts       # Generation-bound authority lifetime and revocation
 │   ├── execution-plan.ts         # Executor-owned authority and resource resolution

@@ -49,6 +49,26 @@ test("buildPiArgs emits explicit read-only child launch policy flags", () => {
 		"--no-session",
 		"Task: existing",
 	]);
+	assert.deepEqual(
+		buildPiArgs({
+			task: "bridge",
+			disableExtensions: true,
+			extensionPaths: ["/tmp/child-peer-bridge.ts"],
+			tools: ["read", "subagent_peer_send", "subagent_peer_list"],
+		}),
+		[
+			"--mode",
+			"json",
+			"-p",
+			"--no-session",
+			"--no-extensions",
+			"-e",
+			"/tmp/child-peer-bridge.ts",
+			"--tools",
+			"read,subagent_peer_send,subagent_peer_list",
+			"Task: bridge",
+		],
+	);
 });
 test("runSingleAgent launch policies preserve agent tools unless explicitly overridden", async () => {
 	const script = [
@@ -82,6 +102,30 @@ test("runSingleAgent launch policies preserve agent tools unless explicitly over
 	);
 	assert.match(result.finalOutput ?? "", /--tools/);
 	assert.match(result.finalOutput ?? "", /read/);
+	const inheritedDefaults = await runSingleAgent(
+		process.cwd(),
+		[
+			{
+				name: "default-tools",
+				description: "test",
+				systemPrompt: "",
+				source: "built-in",
+				filePath: "built-in:default-tools",
+			},
+		],
+		"default-tools",
+		"task",
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		1_000,
+		undefined,
+		(results) => ({ mode: "single", agentScope: "user", projectAgentsDir: null, results }),
+		{ command: process.execPath, argsPrefix: ["-e", script, "--"] },
+		{ additionalTools: ["subagent_peer_send", "subagent_peer_list"] },
+	);
+	assert.doesNotMatch(inheritedDefaults.finalOutput ?? "", /--tools/);
 });
 test("runSingleAgent captures structured v2 results and keeps the display task", async () => {
 	const output = JSON.stringify({

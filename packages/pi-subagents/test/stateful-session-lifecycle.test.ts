@@ -206,6 +206,78 @@ test("stale idempotent spawn cleanup cannot delete a replacement session attempt
 	}
 });
 
+test("stateful completion delivery routes nested results to the direct parent without root duplication", async () => {
+	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parent-completion-"));
+	const agentDir = path.join(root, "agent-home");
+	mkdirSync(agentDir);
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		const mock = createMockPi();
+		const controller = registerStatefulSubagents(mock.pi, {
+			settings: { transport: "in-process" },
+			loadTransport: async () => ({
+				kind: "fake",
+				async runTurn(_agent, task) {
+					return { output: `done:${task}`, exitCode: 0 };
+				},
+			}),
+		});
+		const context = createMockContext({ cwd: root, isProjectTrusted: () => true });
+		await mock.events.get("session_start")?.[0]?.({}, context.ctx);
+		const spawn = mock.tools.find((tool) => tool.name === "subagent_spawn") as {
+			execute: (...args: unknown[]) => Promise<{
+				details: { agent: { id: string; taskPath: string } };
+			}>;
+		};
+		const parent = await spawn.execute(
+			"parent",
+			{ agent: "worker", taskName: "parent", task: "parent" },
+			undefined,
+			undefined,
+			context.ctx,
+		);
+		while (controller.listAgents()[0]?.state === "running") {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const rootCompletionCount = mock.sentMessages.length;
+		const child = await spawn.execute(
+			"child",
+			{
+				agent: "worker",
+				taskName: "child",
+				task: "child",
+				parentId: parent.details.agent.taskPath,
+			},
+			undefined,
+			undefined,
+			context.ctx,
+		);
+		while (
+			controller.listAgents().find((agent) => agent.id === child.details.agent.id)?.state ===
+			"running"
+		) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(mock.sentMessages.length, rootCompletionCount);
+		const retainedParent = controller
+			.listAgents()
+			.find((agent) => agent.id === parent.details.agent.id);
+		const nestedMessage = retainedParent?.mailbox.find(
+			(message) => message.senderId === child.details.agent.id,
+		);
+		assert.equal(nestedMessage?.completionId?.startsWith("completion:"), true);
+		assert.match(nestedMessage?.content ?? "", /done:child/);
+		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("stateful clear and session replacement serialize active-child cleanup before the new runtime", async () => {
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-runtime-replacement-"));
 	const agentDir = path.join(root, "agent-home");

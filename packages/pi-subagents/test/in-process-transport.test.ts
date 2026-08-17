@@ -135,6 +135,7 @@ class FailOnceWorkspaceManager extends FakeWorkspaceManager {
 class FakeChildSession implements ChildSession {
 	readonly sessionId = "child-session";
 	readonly prompts: string[] = [];
+	readonly steers: string[] = [];
 	readonly messages: Array<Record<string, unknown>> = [];
 	aborts = 0;
 	disposals = 0;
@@ -170,6 +171,11 @@ class FakeChildSession implements ChildSession {
 		};
 		this.messages.push(assistant);
 		for (const listener of this.listeners) listener({ type: "message_update", message: assistant });
+	}
+
+	async steer(text: string): Promise<void> {
+		this.steers.push(text);
+		this.messages.push({ role: "user", content: text });
 	}
 
 	subscribe(listener: (event: unknown) => void): () => void {
@@ -502,6 +508,56 @@ test("InProcessTransport maps parent abort to an interrupted outcome and reuses 
 		new AbortController().signal,
 	);
 	assert.equal(followUp.output, "done:recovered");
+	await transport.shutdown();
+});
+
+test("InProcessTransport pushes peer envelopes only to an active retained child", async () => {
+	const child = new FakeChildSession();
+	const peerRuntime = {
+		send: async () => {
+			throw new Error("unused");
+		},
+		list: () => [],
+		acknowledge: async () => undefined,
+		issueCredentials: async () => {
+			throw new Error("unused");
+		},
+		revoke: () => undefined,
+	};
+	const transport = new InProcessTransport({
+		modelRegistry: {} as never,
+		getParentRuntime: () => ({ model: undefined, thinkingLevel: "off" }),
+		createSession: async (options) => {
+			assert.equal(options.peerRuntime, peerRuntime);
+			return child;
+		},
+		discoverAgent: () => agentConfig(),
+		peerRuntime,
+	});
+	const agent = managedAgent({ taskName: "worker", taskPath: "/root/worker" });
+	assert.equal(
+		await transport.deliverMessage(agent, {
+			id: "msg_before",
+			senderId: "root",
+			recipientId: agent.id,
+			content: "queued",
+			createdAt: 1,
+		}),
+		false,
+	);
+	await transport.runTurn(agent, "start", new AbortController().signal);
+	assert.equal(
+		await transport.deliverMessage(agent, {
+			id: "msg_active",
+			senderId: "root",
+			recipientId: agent.id,
+			content: "active",
+			createdAt: 2,
+		}),
+		true,
+	);
+	assert.match(child.steers[0] ?? "", /Message ID: msg_active/);
+	assert.match(child.steers[0] ?? "", /Payload:\nactive/);
 	await transport.shutdown();
 });
 
@@ -1274,5 +1330,28 @@ test("public SDK child-session adapter completes a deterministic in-memory turn 
 		2,
 	);
 	child.dispose();
+	const peerChild = await createSdkChildSession({
+		agent: managedAgent({ id: "sa_peer_sdk", cwd: childCwd }),
+		agentConfig: agentConfig({ tools: undefined, model: "child-smoke/child-model:max" }),
+		history: [],
+		modelRegistry,
+		parentRuntime: { model: undefined, thinkingLevel: "off" },
+		peerRuntime: {
+			async send() {
+				throw new Error("unused");
+			},
+			list: () => [],
+			async acknowledge() {},
+			async issueCredentials() {
+				throw new Error("unused");
+			},
+			revoke() {},
+		},
+	});
+	const peerTools = peerChild.getActiveToolNames();
+	assert.ok(peerTools.includes("subagent_peer_send"));
+	assert.ok(peerTools.includes("subagent_peer_list"));
+	assert.ok(peerTools.includes("read"), "peer tools must not suppress Pi default built-ins");
+	peerChild.dispose();
 	assert.deepEqual(readdirSync(childCwd), []);
 });
