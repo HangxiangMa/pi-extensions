@@ -3,7 +3,10 @@
 ## Process lifecycle
 
 - Keep signalling a cancelled POSIX process group until captured stdout and stderr close because descendants can outlive the leader while retaining its streams.
-- Snapshot detached-subagent terminal state before resolving waiters, inject completion with `deliverAs: "steer"` and `triggerTurn: false`, and serialize persistence callbacks in invocation order.
+- Snapshot detached-subagent terminal state before resolving waiters.
+- Deliver non-waking detached completions with `deliverAs: "steer"` and omit `triggerTurn`; explicit `false` bypasses steering while streaming.
+- Set `triggerTurn: true` only when auto-resume must wake an idle root.
+- Serialize persistence callbacks in invocation order.
 
 ## Pi runtime and settings
 
