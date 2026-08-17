@@ -393,6 +393,104 @@ test("browse stays read-only across TUI detail navigation and RPC pagination", a
 	assert.equal(rpcCall, 4);
 });
 
+test("RPC review keeps Markdown, LaTeX, and Mermaid as bounded sanitized source", async () => {
+	let calls = 0;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (title: string, choices: string[]) => {
+			calls += 1;
+			assert.match(title, /# Formula/u);
+			assert.match(title, /\$x\^2\$/u);
+			assert.match(title, /```mermaid[\s\S]*flowchart LR/u);
+			assert.doesNotMatch(title, /[┌╭].*[┐╮]/u);
+			assert.doesNotMatch(title, /https:\/\/unsafe\.example/u);
+			assert.equal(title.includes("\u001b"), false);
+			assert.match(title, /unsafetext/u);
+			assert.ok(title.split("\n").every((line) => line.length <= 120));
+			return choices.find((choice) => choice.startsWith("Back"));
+		},
+		custom: async () => {
+			throw new Error("RPC Markdown review must not open custom TUI");
+		},
+	});
+	const menu = defineMenu<undefined, "review", "unused">({
+		start: "review",
+		screens: {
+			review: () => ({
+				kind: "review",
+				title: "Formula",
+				content:
+					"# Formula\n\n$x^2$\n\n```mermaid\nflowchart LR\n A[unsafe\u001b]8;;https://unsafe.example\u0007text] --> B\n```",
+				format: { kind: "markdown" },
+			}),
+		},
+		actions: { unused: async () => ({ kind: "close" }) },
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "back",
+	});
+	assert.equal(calls, 1);
+});
+
+test("RPC browse keeps Markdown source private until bounded detail pages", async () => {
+	let calls = 0;
+	const context = createMockContext({
+		mode: "rpc",
+		hasUI: true,
+		select: async (title: string, choices: string[]) => {
+			calls += 1;
+			if (calls === 1) {
+				assert.deepEqual(choices, ["Guide", "Back"]);
+				assert.doesNotMatch(choices.join("\n"), /private-markdown|flowchart/u);
+				return "Guide";
+			}
+			if (calls === 2) {
+				assert.match(title, /private-markdown/u);
+				assert.match(title, /\$x\^2\$/u);
+				assert.match(title, /```mermaid[\s\S]*flowchart LR/u);
+				assert.doesNotMatch(title, /[┌╭].*[┐╮]/u);
+				assert.equal(title.includes("\u001b"), false);
+				assert.ok(title.split("\n").every((line) => line.length <= 120));
+				return choices.find((choice) => choice.startsWith("Back"));
+			}
+			return choices.find((choice) => choice.startsWith("Back"));
+		},
+		custom: async () => {
+			throw new Error("RPC Markdown browse must not open custom TUI");
+		},
+	});
+	const menu = defineMenu<undefined, "browse", "unused">({
+		start: "browse",
+		screens: {
+			browse: () => ({
+				kind: "browse",
+				title: "Guides",
+				items: [
+					{
+						id: "guide",
+						label: "Guide",
+						detailDocument: {
+							content: "private-markdown\n\n$x^2$\n\n```mermaid\nflowchart LR\n A --> B\n```",
+							format: { kind: "markdown" },
+						},
+					},
+				],
+				hint: "back",
+			}),
+		},
+		actions: { unused: async () => ({ kind: "close" }) },
+	});
+
+	assert.deepEqual(await runMenu(context.ctx, menu, { getState: () => undefined }), {
+		kind: "closed",
+		reason: "back",
+	});
+	assert.equal(calls, 3);
+});
+
 test("RPC browse exact details preserve documents, bounds, identity, and Back behavior", async () => {
 	const longLine = `${"x".repeat(120)}y`;
 	const items = [

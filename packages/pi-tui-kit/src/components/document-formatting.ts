@@ -1,7 +1,9 @@
 import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import type { MarkdownTheme } from "@earendil-works/pi-tui";
+import * as PiTui from "@earendil-works/pi-tui";
 import type { ReviewFormat } from "../types.js";
+import { mermaidMarkdownTransform, supportsRichMarkdown } from "./mermaid.js";
 import { getLanguageFromPath, highlightCode } from "./syntax-highlighting.js";
 
 export const RPC_DOCUMENT_LINE_WIDTH = 120;
@@ -10,7 +12,8 @@ export const RPC_DOCUMENT_PAGE_SIZE = 8;
 const TAB_SIZE = 4;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-type DocumentTheme = Pick<Theme, "fg" | "bold">;
+type DocumentTheme = Pick<Theme, "fg" | "bold"> &
+	Partial<Pick<Theme, "italic" | "underline" | "strikethrough">>;
 
 export function createDocumentLineCache(theme: DocumentTheme) {
 	let cached:
@@ -19,6 +22,9 @@ export function createDocumentLineCache(theme: DocumentTheme) {
 				formatKind: ReviewFormat["kind"];
 				language: string | undefined;
 				filePath: string | undefined;
+				renderLatex: boolean | undefined;
+				renderMermaid: boolean | undefined;
+				richMarkdown: boolean;
 				width: number;
 				lines: string[];
 		  }
@@ -31,6 +37,9 @@ export function createDocumentLineCache(theme: DocumentTheme) {
 				cached.formatKind === identity.kind &&
 				cached.language === identity.language &&
 				cached.filePath === identity.filePath &&
+				cached.renderLatex === identity.renderLatex &&
+				cached.renderMermaid === identity.renderMermaid &&
+				cached.richMarkdown === identity.richMarkdown &&
 				cached.width === width
 			) {
 				return cached.lines;
@@ -41,6 +50,9 @@ export function createDocumentLineCache(theme: DocumentTheme) {
 				formatKind: identity.kind,
 				language: identity.language,
 				filePath: identity.filePath,
+				renderLatex: identity.renderLatex,
+				renderMermaid: identity.renderMermaid,
+				richMarkdown: identity.richMarkdown,
 				width,
 				lines,
 			};
@@ -58,8 +70,11 @@ export function formatDocumentLines(
 	width: number,
 	theme: DocumentTheme,
 ): string[] {
-	const segments = documentSegments(content, width);
 	const resolvedFormat = format ?? { kind: "text" as const };
+	if (resolvedFormat.kind === "markdown") {
+		return renderMarkdownDocument(content, resolvedFormat, width, theme);
+	}
+	const segments = documentSegments(content, width);
 	if (resolvedFormat.kind === "code") {
 		const language =
 			resolvedFormat.language ??
@@ -85,6 +100,47 @@ export function plainDocumentLines(content: string, width: number): string[] {
 	return documentSegments(content, width).map(({ text }) => text);
 }
 
+function renderMarkdownDocument(
+	content: string,
+	format: Extract<ReviewFormat, { kind: "markdown" }>,
+	width: number,
+	theme: DocumentTheme,
+): string[] {
+	const component = new PiTui.Markdown(
+		sanitizeDocumentText(content),
+		0,
+		0,
+		markdownTheme(theme),
+		{ color: (text) => theme.fg("text", text) },
+		{
+			renderLatex: format.renderLatex ?? true,
+			transform: format.renderMermaid === false ? undefined : mermaidMarkdownTransform(theme),
+		},
+	);
+	return component.render(Math.max(1, width));
+}
+
+function markdownTheme(theme: DocumentTheme): MarkdownTheme {
+	return {
+		heading: (text) => theme.fg("mdHeading", text),
+		link: (text) => theme.fg("mdLink", text),
+		linkUrl: (text) => theme.fg("mdLinkUrl", text),
+		code: (text) => theme.fg("mdCode", text),
+		codeBlock: (text) => theme.fg("mdCodeBlock", text),
+		codeBlockBorder: (text) => theme.fg("mdCodeBlockBorder", text),
+		quote: (text) => theme.fg("mdQuote", text),
+		quoteBorder: (text) => theme.fg("mdQuoteBorder", text),
+		hr: (text) => theme.fg("mdHr", text),
+		listBullet: (text) => theme.fg("mdListBullet", text),
+		bold: (text) => theme.bold(text),
+		italic: (text) => theme.italic?.(text) ?? text,
+		underline: (text) => theme.underline?.(text) ?? text,
+		strikethrough: (text) => theme.strikethrough?.(text) ?? text,
+		highlightCode: (code, language) =>
+			code.split("\n").map((line) => highlightCode(line, language, theme)),
+	};
+}
+
 export function documentDialogPages(content: string, width: number, pageSize: number): string[][] {
 	const lines = plainDocumentLines(content, width);
 	const safePageSize = Math.max(1, Math.floor(pageSize));
@@ -96,13 +152,28 @@ export function documentDialogPages(content: string, width: number, pageSize: nu
 }
 
 function documentFormatIdentity(format: ReviewFormat | undefined) {
+	const shared = {
+		renderLatex: undefined,
+		renderMermaid: undefined,
+		richMarkdown: supportsRichMarkdown(),
+	};
 	if (format?.kind === "code") {
-		return { kind: format.kind, language: format.language, filePath: format.filePath };
+		return { ...shared, kind: format.kind, language: format.language, filePath: format.filePath };
 	}
 	if (format?.kind === "diff") {
-		return { kind: format.kind, language: undefined, filePath: format.filePath };
+		return { ...shared, kind: format.kind, language: undefined, filePath: format.filePath };
 	}
-	return { kind: "text" as const, language: undefined, filePath: undefined };
+	if (format?.kind === "markdown") {
+		return {
+			...shared,
+			kind: format.kind,
+			language: undefined,
+			filePath: undefined,
+			renderLatex: format.renderLatex ?? true,
+			renderMermaid: format.renderMermaid ?? true,
+		};
+	}
+	return { ...shared, kind: "text" as const, language: undefined, filePath: undefined };
 }
 
 export function sanitizeDocumentText(value: unknown): string {
@@ -110,8 +181,19 @@ export function sanitizeDocumentText(value: unknown): string {
 	return Array.from(stripped, (character) => {
 		if (character === "\n" || character === "\t") return character;
 		const codePoint = character.codePointAt(0) ?? 0;
+		if (isBidiControl(codePoint)) return "";
 		return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
 	}).join("");
+}
+
+function isBidiControl(codePoint: number) {
+	return (
+		codePoint === 0x061c ||
+		codePoint === 0x200e ||
+		codePoint === 0x200f ||
+		(codePoint >= 0x202a && codePoint <= 0x202e) ||
+		(codePoint >= 0x2066 && codePoint <= 0x2069)
+	);
 }
 
 function documentSegments(content: string, width: number) {
@@ -133,7 +215,7 @@ function expandTabs(line: string): string {
 			continue;
 		}
 		result += segment;
-		column += visibleWidth(segment);
+		column += PiTui.visibleWidth(segment);
 	}
 	return result;
 }
@@ -150,7 +232,7 @@ function hardWrapLine(line: string, width: number): string[] {
 		currentWidth = 0;
 	};
 	for (const { segment } of graphemeSegmenter.segment(line)) {
-		const segmentWidth = visibleWidth(segment);
+		const segmentWidth = PiTui.visibleWidth(segment);
 		if (segmentWidth > safeWidth) {
 			if (current.length > 0) flush();
 			lines.push("?".repeat(safeWidth));

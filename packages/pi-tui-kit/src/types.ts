@@ -97,7 +97,8 @@ export interface ChoiceScreen<ActionId extends string> {
 export type ReviewFormat =
 	| { kind: "text" }
 	| { kind: "code"; language?: string; filePath?: string }
-	| { kind: "diff"; filePath?: string };
+	| { kind: "diff"; filePath?: string }
+	| { kind: "markdown"; renderLatex?: boolean; renderMermaid?: boolean };
 
 /** Exact full-body content for a browse detail view. */
 export interface BrowseDetailDocument {

@@ -42,10 +42,11 @@ The Kit's production JavaScript imports Pi TUI at runtime but keeps Pi Coding Ag
 This prevents a source-loaded extension from evaluating a second heavyweight coding-agent runtime
 when its menu first opens. Borders and task loaders compose public Pi TUI primitives with the theme
 and keybindings supplied by the active UI callback; review syntax coloring uses the Kit's declared
-highlighter dependency and the same callback theme.
+highlighter dependency and the same callback theme. Mermaid rendering lazy-loads its declared
+renderer only before the first screen containing an enabled Mermaid fence.
 
-Repository maintainers can measure cold package import, first actions/review frame, and first task
-frame in fresh serial processes:
+Repository maintainers can measure cold package import plus first actions, code-review, Mermaid, and
+task frames in fresh serial processes:
 
 ```bash
 npm run build --workspace @narumitw/pi-tui-kit
@@ -393,14 +394,15 @@ keeps one deterministic unfiltered list, then presents bounded detail pages; `se
 rendered.
 
 Use `details` for legacy prose lines. The Kit normalizes their whitespace and prepends available
-status and description text. Use `detailDocument` for a complete whitespace-sensitive body such as
-JSON, source code, or a diff. Its `content` preserves indentation, expands tabs to four-column stops,
-hard-wraps by terminal cells, strips terminal controls, and uses the same optional text, code, or diff
-`format` as a review screen. When both fields are present, `detailDocument` is the complete body and
-takes precedence over `details`, status, and description inside the detail body. The item label still
-names the detail, while status and description remain available in list presentation. RPC retains the
-existing status-bearing selector label as the dialog title for compatibility, but does not prepend a
-second status line to the exact body.
+status and description text. Use `detailDocument` for a complete body such as JSON, source code, a
+diff, or Markdown. Text, code, and diff formats preserve indentation, expand tabs to four-column
+stops, hard-wrap by terminal cells, and strip terminal plus bidirectional display controls. Markdown
+format applies the same safety boundary but then renders semantic Markdown rather than preserving
+exact source whitespace. When both fields are
+present, `detailDocument` is the complete body and takes precedence over `details`, status, and
+description inside the detail body. The item label still names the detail, while status and
+description remain available in list presentation. RPC retains the existing status-bearing selector
+label as the dialog title for compatibility, but does not prepend a second status line to the body.
 
 Exact document content is never added to fuzzy-search metadata or RPC selector labels. Copy only safe,
 intentional aliases or metadata into `searchText`; do not copy a large or sensitive document merely
@@ -466,8 +468,8 @@ const inputScreen = {
 
 Review screens preserve indentation and hard-wrap by terminal cells rather than prose words. Their
 viewport supports Up, Down, Page Up, Page Down, Home, and End. RPC sends bounded pages instead of one
-unbounded dialog title. Treat `content` as untrusted display input; the kit strips terminal controls
-before formatting it.
+unbounded dialog title. Treat `content` as untrusted display input; the kit strips terminal and
+bidirectional display controls before formatting it.
 
 ```ts
 const reviewScreen = {
@@ -480,12 +482,34 @@ const reviewScreen = {
 };
 ```
 
-Review formats are `{ kind: "text" }`, `{ kind: "code", language?, filePath? }`, and
-`{ kind: "diff", filePath? }`. Omitted `viewportSize` keeps the fixed 14-row TUI viewport, and
-numeric values remain fixed integers from 1 through 50. Set `viewportSize: "adaptive"` to recompute
-from the live terminal height on every TUI render. Adaptive review reserves three terminal rows for
-Pi-owned UI and keeps the complete frame within `max(1, floor(terminal rows) - 3)` rows; this mode is
-not capped at the numeric 50-row maximum.
+Review formats are `{ kind: "text" }`, `{ kind: "code", language?, filePath? }`,
+`{ kind: "diff", filePath? }`, and
+`{ kind: "markdown", renderLatex?, renderMermaid? }`. Choosing Markdown is opt-in; both rich
+renderers default to `true`, and either can be disabled explicitly. TUI uses Pi's Markdown renderer
+for headings, emphasis, links, lists, code highlighting, and supported inline or block LaTeX.
+
+Enabled top-level `mermaid` fences render locally as themed Unicode when a warning-free flowchart,
+state, class, entity-relationship, or sequence diagram fits the current width. Partial parses retain
+the fenced source and add a warning. Unsupported, oversized, unavailable, or disabled rendering
+retains readable fenced source. Resizing can switch between source and art. The Kit options are
+independent of Pi's transcript-only Mermaid setting and use no browser, image, SVG, or network.
+
+```ts
+const markdownReviewScreen = {
+  kind: "review" as const,
+  title: "Architecture notes",
+  content: "# Formula\\n\\n$x^2$\\n\\n```mermaid\\nflowchart LR\\n A --> B\\n```",
+  format: { kind: "markdown" as const },
+  viewportSize: "adaptive" as const,
+};
+```
+
+Rich Markdown rendering is TUI-only. RPC keeps sanitized, bounded source pages, and a host without
+Pi's public rich-Markdown capability safely displays readable source for unsupported rich elements.
+Omitted `viewportSize` keeps the fixed 14-row TUI viewport, and numeric values remain fixed integers
+from 1 through 50. Set `viewportSize: "adaptive"` to recompute from the live terminal height on every
+TUI render. Adaptive review reserves three terminal rows for Pi-owned UI and keeps the complete frame
+within `max(1, floor(terminal rows) - 3)` rows; this mode is not capped at the numeric 50-row maximum.
 
 At constrained heights, adaptive review prioritizes one content row, then a compact title, then a
 compact confirmation/Back-or-Close/navigation hint. From four available rows it shows position when
@@ -712,14 +736,18 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
   `MenuCloseReason`, and result types.
 - `@narumitw/pi-tui-kit/testing` — separate subpath for `createTuiHarness()`, `createRpcHarness()`,
   strict scripts, and their public testing types; it is not re-exported from the production root.
-- `PI_EXTENSION_MENU_API_VERSION` — current API version (`12`).
-  Version 12 adds optional searchable `choice` fields while version-11 menu definitions remain valid.
-  Version 11 added Live Choice confirmation-only gating, version 10 added exact browse detail documents, version 9 added `runLiveChoice()` and `formatInteractionHints()`, version 8 added disabled action reasons and adaptive action-label columns, version 7 added `runConfirmation()`, and version 6 added the read-only `browse` screen and `runCustomInteraction()`.
+- `PI_EXTENSION_MENU_API_VERSION` — current API version (`13`).
+  Version 13 adds opt-in Markdown, LaTeX, and Mermaid document formatting while version-12 menu
+  definitions remain valid. Version 12 added optional searchable `choice` fields, version 11 added
+  Live Choice confirmation-only gating, version 10 added exact browse detail documents, version 9
+  added `runLiveChoice()` and `formatInteractionHints()`, version 8 added disabled action reasons and
+  adaptive action-label columns, version 7 added `runConfirmation()`, and version 6 added the
+  read-only `browse` screen and `runCustomInteraction()`.
 
 ## 🗂️ Package layout
 
 - `src/` — authored TypeScript and the public package entrypoint
-- `src/components/` — internal TUI input, browse, review, exact-document, settings, and rendering adapters
+- `src/components/` — internal TUI input, browse, review, document, Markdown, Mermaid, settings, and rendering adapters
 - `src/testing/` — supported TUI/RPC test drivers exported only through the `/testing` subpath
 - `src/task.ts` — standalone and menu-shared task lifecycle orchestration
 - `src/confirmation.ts` — standalone confirmation mode adaptation and lifecycle results

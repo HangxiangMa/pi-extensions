@@ -53,6 +53,7 @@
 		"directory": "packages/pi-tui-kit"
 	},
 	"dependencies": {
+		"grok-mermaid": "0.2.2",
 		"highlight.js": "11.12.0"
 	}
 }

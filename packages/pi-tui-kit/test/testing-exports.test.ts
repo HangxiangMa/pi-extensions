@@ -11,7 +11,7 @@ test("built package roots resolve separate production and testing exports", asyn
 	const testingSpecifier = "@narumitw/pi-tui-kit/testing";
 	const production = await import(productionSpecifier);
 	const testing = await import(testingSpecifier);
-	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 12);
+	assert.equal(production.PI_EXTENSION_MENU_API_VERSION, 13);
 	assert.equal(typeof production.sanitizeTerminalText, "function");
 	assert.equal(typeof production.formatInteractionHints, "function");
 	assert.equal(typeof production.runConfirmation, "function");
@@ -27,10 +27,11 @@ test("built package roots resolve separate production and testing exports", asyn
 	t.onTestFinished(() => rmSync(fixture, { recursive: true, force: true }));
 	writeFileSync(
 		path.join(fixture, "usage.ts"),
-		`import { PI_EXTENSION_MENU_API_VERSION, type BrowseDetailDocument, type ChoiceScreen, type LiveChoiceItem, type MenuBrowseItem } from "@narumitw/pi-tui-kit";\n` +
+		`import { PI_EXTENSION_MENU_API_VERSION, type BrowseDetailDocument, type ChoiceScreen, type LiveChoiceItem, type MenuBrowseItem, type ReviewFormat } from "@narumitw/pi-tui-kit";\n` +
 			`import { createRpcHarness, createTuiHarness } from "@narumitw/pi-tui-kit/testing";\n` +
-			`const version: 12 = PI_EXTENSION_MENU_API_VERSION;\n` +
-			`const document: BrowseDetailDocument = { content: "  exact", format: { kind: "text" } };\n` +
+			`const version: 13 = PI_EXTENSION_MENU_API_VERSION;\n` +
+			`const markdown: ReviewFormat = { kind: "markdown", renderLatex: false, renderMermaid: true };\n` +
+			`const document: BrowseDetailDocument = { content: "# Formula\\n\\n$x^2$", format: markdown };\n` +
 			`const item: MenuBrowseItem = { id: "one", label: "One", detailDocument: document };\n` +
 			`const choice: LiveChoiceItem = { id: "active", label: "Active", confirmationDisabled: true, confirmationDisabledReason: "Already active" };\n` +
 			`const screen: ChoiceScreen<"select"> = { kind: "choice", title: "Records", enableSearch: true, items: [{ id: "one", label: "One", searchText: "alias" }], action: "select" };\n` +
