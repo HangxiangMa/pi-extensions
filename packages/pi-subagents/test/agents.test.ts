@@ -81,6 +81,11 @@ test("built-in lookup is immutable when a user agent and settings override the s
 		assert.equal(getBuiltInAgent("explorer")?.thinkingLevel, "low");
 		assert.deepEqual(getBuiltInAgent("explorer")?.tools, ["read", "grep", "find", "ls"]);
 		assert.equal(getBuiltInAgent("worker")?.thinkingLevel, undefined);
+		assert.match(builtIn?.description ?? "", /bounded.*implementation.*clear ownership/i);
+		assert.doesNotMatch(builtIn?.description ?? "", /general-purpose/i);
+		assert.match(builtIn?.systemPrompt ?? "", /isolated Pi child context/i);
+		assert.doesNotMatch(builtIn?.systemPrompt ?? "", /isolated Pi process/i);
+		assert.match(builtIn?.systemPrompt ?? "", /main agent owns integration.*final verification/i);
 		assert.equal(getBuiltInAgent("planner"), undefined);
 		assert.equal(getBuiltInAgent("scout"), undefined);
 		assert.equal(getBuiltInAgent("reviewer"), undefined);

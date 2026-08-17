@@ -1,5 +1,7 @@
 # LLM-Agent Least Privilege and Runtime Enforcement
 
+> **Historical research input:** Role names and automation described here summarize external systems and do not define current `pi-subagents` built-ins or routing; see the [current direction](../implementation-notes/pi-subagents-current-direction.md).
+
 ## Executive findings
 
 - **Synthesis:** Current LLMs should propose actions and policies, but a separate trusted mechanism should decide whether an authenticated principal authorized the exact operation, resource, arguments, destination, and lifetime.

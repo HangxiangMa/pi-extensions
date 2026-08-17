@@ -1,5 +1,7 @@
 # Coding-Agent Subagents Architecture Deep Dive
 
+> **Historical research input:** Role names and automation described here summarize research-era architecture options and do not define current `pi-subagents` built-ins or routing; see the [current direction](../implementation-notes/pi-subagents-current-direction.md).
+
 Date: 2026-08-10.
 
 ## Scope and evidence labels

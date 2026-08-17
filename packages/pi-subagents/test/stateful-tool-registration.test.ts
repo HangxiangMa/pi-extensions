@@ -337,19 +337,41 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.match(spawnTool.description, /thinking level.*task difficulty/i);
 		const spawnGuidance = spawnTool.promptGuidelines.join("\n");
 		assert.match(spawnGuidance, /simple or critical-path work/);
+		assert.match(
+			spawnGuidance,
+			/main agent.*planning.*critical-path.*integration.*final verification.*final answer/i,
+		);
+		assert.match(
+			spawnGuidance,
+			/before.*one.*subagent_spawn.*identify.*non-overlapping.*main-agent work.*start immediately.*integration path/i,
+		);
 		assert.match(spawnGuidance, /prefer one subagent_spawn.*broad.*research/i);
+		assert.match(spawnGuidance, /ordinary review.*main agent.*review skill.*deterministic checks/i);
+		assert.match(
+			spawnGuidance,
+			/detached review.*consequential independent verification.*concrete parallel value/i,
+		);
+		assert.doesNotMatch(spawnGuidance, /broad asynchronous research or review/i);
 		assert.match(spawnGuidance, /next-turn.*default/i);
 		assert.match(spawnGuidance, /current response.*does not depend/i);
 		assert.match(spawnGuidance, /blocking subagent.*final answer.*depends/i);
 		assert.doesNotMatch(spawnGuidance, /even when.*final answer.*depends/i);
 		assert.match(spawnGuidance, /do not.*blocking parallel.*same turn/i);
-		assert.match(spawnGuidance, /single subagent_spawn.*isolation or specialization/i);
+		assert.match(
+			spawnGuidance,
+			/single subagent_spawn.*bounded.*clear ownership.*beside.*main-agent work/i,
+		);
+		assert.match(
+			spawnGuidance,
+			/without concurrent main-agent work.*specialist model.*tool profile.*isolation/i,
+		);
 		assert.doesNotMatch(
 			spawnGuidance,
 			/use one blocking subagent parallel call for multiple independent one-shot tasks/i,
 		);
-		assert.match(spawnGuidance, /useful non-overlapping.*immediately/i);
-		assert.match(spawnGuidance, /tell the user.*end the response/i);
+		assert.match(spawnGuidance, /immediately continue.*identified.*local task/i);
+		assert.match(spawnGuidance, /do not merely announce.*wait.*poll.*end/i);
+		assert.doesNotMatch(spawnGuidance, /tell the user.*end the response/i);
 		assert.match(spawnGuidance, /do not poll.*subagent_inspect/i);
 		assert.match(spawnGuidance, /subagent_mailbox.*action.*read/i);
 		assert.doesNotMatch(spawnGuidance, /subagent_(?:list|messages)/i);
@@ -441,6 +463,17 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		const autoResumeGuidance = autoResumeSpawn.promptGuidelines.join("\n");
 		assert.match(autoResumeGuidance, /auto-resume/i);
 		assert.match(autoResumeGuidance, /even when.*final answer.*depends/i);
+		assert.match(
+			autoResumeGuidance,
+			/ordinary review.*main agent.*review skill.*deterministic checks/i,
+		);
+		assert.match(
+			autoResumeGuidance,
+			/detached review.*consequential independent verification.*concrete parallel value/i,
+		);
+		assert.doesNotMatch(autoResumeGuidance, /broad asynchronous research or review/i);
+		assert.match(autoResumeGuidance, /immediately continue.*identified.*local task/i);
+		assert.doesNotMatch(autoResumeGuidance, /tell the user.*end the response/i);
 		assert.doesNotMatch(autoResumeGuidance, /next-turn.*default/i);
 
 		writeFileSync(

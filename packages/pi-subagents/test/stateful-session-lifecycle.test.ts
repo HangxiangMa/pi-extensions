@@ -165,7 +165,7 @@ test("stale idempotent spawn cleanup cannot delete a replacement session attempt
 			undefined,
 			undefined,
 			replacementContext.ctx,
-		) as Promise<{ details: { agent: { id: string } } }>;
+		) as Promise<{ content: Array<{ text: string }>; details: { agent: { id: string } } }>;
 		while (createCalls < 2) await new Promise<void>((resolve) => setImmediate(resolve));
 
 		createResolvers[0]?.({
@@ -182,7 +182,7 @@ test("stale idempotent spawn cleanup cannot delete a replacement session attempt
 			undefined,
 			undefined,
 			replacementContext.ctx,
-		) as Promise<{ details: { agent: { id: string } } }>;
+		) as Promise<{ content: Array<{ text: string }>; details: { agent: { id: string } } }>;
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		assert.equal(createCalls, 2, "the retry must join the replacement session's pending spawn");
 		createResolvers[1]?.({
@@ -193,6 +193,11 @@ test("stale idempotent spawn cleanup cannot delete a replacement session attempt
 		});
 		const [secondResult, thirdResult] = await Promise.all([second, third]);
 		assert.equal(thirdResult.details.agent.id, secondResult.details.agent.id);
+		assert.match(
+			secondResult.content[0]?.text ?? "",
+			/current response must not depend.*next-turn delivery.*not wake an idle root/i,
+		);
+		assert.doesNotMatch(secondResult.content[0]?.text ?? "", /end the response/i);
 		await mock.events.get("session_shutdown")?.[0]?.({}, replacementContext.ctx);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;

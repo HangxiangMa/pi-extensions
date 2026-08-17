@@ -32,15 +32,13 @@ test("shared-workspace write classification and follow-up guards are conservativ
 		() => assertFollowUpWriteAllowed(registry, followUp, false, false),
 		(error: unknown) => {
 			assert.match(String(error), /already active in shared workspace/);
-			assert.match(String(error), /prefer one subagent_spawn.*asynchronous work/i);
+			assert.match(String(error), /keep the existing bounded subagent_spawn/i);
+			assert.match(String(error), /continue.*main agent.*non-overlapping work/i);
+			assert.match(String(error), /close it before.*directly/i);
 			assert.match(String(error), /blocking subagent parallel mode.*synchronous outputs/i);
-			assert.doesNotMatch(
-				String(error),
-				/For independent one-shot work, use subagent parallel mode/,
-			);
-			assert.match(String(error), /let the active agent finish or close/);
+			assert.doesNotMatch(String(error), /combined asynchronous work/i);
+			assert.match(String(error), /disjoint write slices.*worktree/i);
 			assert.match(String(error), /allowConcurrentWrites/);
-			assert.match(String(error), /worktree/);
 			return true;
 		},
 	);

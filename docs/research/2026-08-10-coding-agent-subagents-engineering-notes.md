@@ -1,5 +1,7 @@
 # Coding-Agent Subagents: Engineering Evidence and Recommendations
 
+> **Historical research input:** Role names and automation described here summarize research-era options and do not define current `pi-subagents` built-ins or routing; see the [current direction](../implementation-notes/pi-subagents-current-direction.md).
+
 ## Methodology and scope
 
 This synthesis uses the AlphaXiv MCP paper-discovery and PDF-query tools as its required and primary evidence source.

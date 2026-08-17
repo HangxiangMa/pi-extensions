@@ -69,6 +69,7 @@ function setup(
 		| {
 				label: string;
 				description: string;
+				promptGuidelines?: string[];
 				parameters: {
 					additionalProperties?: boolean;
 					required?: string[];
@@ -102,6 +103,9 @@ test("subagent_consult registers a strict actionless single-agent schema", async
 	const { tool } = setup();
 	assert.equal(tool.label, "Consult Read-only Subagent");
 	assert.match(tool.description, /read-only/i);
+	const guidance = tool.promptGuidelines?.join("\n") ?? "";
+	assert.match(guidance, /bounded read-only evidence.*independent perspective.*worth.*wait/i);
+	assert.match(guidance, /ordinary planning.*review.*main agent.*skills.*deterministic checks/i);
 	assert.equal(tool.parameters.additionalProperties, false);
 	assert.deepEqual(tool.parameters.required?.sort(), ["agent", "task"]);
 	assert.equal(tool.parameters.properties?.agentScope?.default, "user");

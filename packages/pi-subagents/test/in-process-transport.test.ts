@@ -742,8 +742,14 @@ test("registered detached spawn auto-resumes without exposing a wait tool", asyn
 			activeAgents: 1,
 			retainedAgents: 1,
 		});
-		assert.match(spawned.content[0]?.text ?? "", /useful non-overlapping work immediately/i);
-		assert.match(spawned.content[0]?.text ?? "", /end the response/i);
+		assert.match(spawned.content[0]?.text ?? "", /continue the identified.*local work/i);
+		assert.match(spawned.content[0]?.text ?? "", /auto-resume.*synthesis/i);
+		assert.doesNotMatch(spawned.content[0]?.text ?? "", /end the response/i);
+		assert.match(spawned.content[0]?.text ?? "", /do not merely announce.*end/i);
+		assert.match(
+			spawned.content[0]?.text ?? "",
+			/explicit user-requested specialist model.*tool-profile.*isolation/i,
+		);
 		assert.match(spawned.content[0]?.text ?? "", /do not poll/i);
 		await waitForPromptCount(1);
 		assert.deepEqual(child.prompts, ["first"]);

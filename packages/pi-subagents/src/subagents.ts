@@ -217,7 +217,11 @@ function registerBlockingSubagent(
 		].join(" ");
 	const promptGuidelines = () => [
 		"Use subagent only when delegation fits; the main agent should decide how many subagents to spawn from task shape instead of waiting for the user to specify a count.",
+		"The main agent retains overall planning, immediate critical-path work, integration, final verification, and the final answer.",
 		"Use no subagent for simple answers, quick targeted edits, latency-sensitive one-step work, tasks requiring frequent user back-and-forth, or critical-path work the main agent can perform directly.",
+		"One ordinary implementation worker should not replace work the main agent can perform directly; use a blocking single only when intentional synchronous isolation or a user-requested specialist justifies waiting.",
+		"Keep ordinary planning in the main agent, or use explicit workflow mode when a genuine dependency graph requires caller-authored orchestration.",
+		"Keep ordinary review in the main agent with a review skill and deterministic checks; reserve panel mode or custom verifier agents for consequential independent verification.",
 		"Use the blocking subagent tool only when delegated outputs are required before the main agent's next action and waiting is intentional; the main agent cannot process queued steering until the call returns.",
 		"Use a blocking subagent single, parallel, chain, workflow, panel, or fan-in call only when synchronous context or output isolation is worth making the main agent unavailable while it runs.",
 		`If a blocking parallel subagent call is genuinely required, keep tasks independent, stay within the configured max ${resolveBlockingMaxParallelTasks(getSettings())}, and avoid write-heavy implementation touching the same files or shared state.`,
