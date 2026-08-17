@@ -51,7 +51,9 @@ Use custom verifier agents only when independent child verification is explicitl
 
 ## Tool-surface direction
 
-The current transition target is async-first.
+The current recommendation is the user-selected `async-only` workflow, while `all` remains the compatibility default.
+
+`async-only` exposes `subagent_spawn`, `subagent_send`, `subagent_manage`, `subagent_mailbox`, and `subagent_inspect`.
 
 `subagent_spawn` is preferred only when detached execution creates real parallelism rather than moving the main agent's only useful task into a child.
 
@@ -63,17 +65,19 @@ Blocking `subagent` remains available for intentional synchronous output, but on
 
 `subagent_consult` remains the synchronous read-only exception while its use case is still supported.
 
-Future async-only behavior needs a separate approved migration decision.
+The four async lifecycle tools remain split because start, follow-up, lifecycle, and queue operations have distinct contracts.
+
+Changing the default, removing compatibility tools, or consolidating lifecycle tools needs a separate approved migration decision.
 
 ## Active follow-ups
 
-- [`2026-08-17_pi-subagents-async-first-tool-surface-plan.md`](../plans/2026-08-17_pi-subagents-async-first-tool-surface-plan.md) consumes the completed main-agent-led rubric and owns later async-first tool-surface migration decisions.
 - [`2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) remains the owner for rolling execution of caller-authored workflows.
 - [`2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) remains the owner for matched evidence before any adaptive/default routing change.
 
 ## Current reference notes
 
 - The [completed main-agent-led guidance plan](../plans/archived/2026-08-17_pi-subagents-main-agent-led-delegation-guidance-plan.md) records the accepted delegation rubric and verification evidence.
+- The [completed async-first tool-surface plan](../plans/archived/2026-08-17_pi-subagents-async-first-tool-surface-plan.md) records the compatibility and recommendation decisions.
 - [`pi-subagents-capability-matrix.md`](pi-subagents-capability-matrix.md) records maintained capability boundaries.
 - [`pi-subagents-stateful-runtime.md`](pi-subagents-stateful-runtime.md) records detached lifecycle and transport behavior.
 - [`pi-subagents-rpc-v1.md`](pi-subagents-rpc-v1.md) records the RPC transport contract.

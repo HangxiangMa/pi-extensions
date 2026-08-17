@@ -28,6 +28,7 @@ import subagents, {
 	inspectDelegationWorkflowSettings,
 	updateDelegationWorkflowSetting,
 } from "../src/subagents.js";
+import { showWorkflowPreview } from "../src/workflow-ui.js";
 import { installSubagentsTestEnvironment } from "./subagents-test-helpers.js";
 
 const restoreTestEnvironment = installSubagentsTestEnvironment();
@@ -331,6 +332,39 @@ test("agent tool drafts preserve settings across searchable save, discard, and E
 	}
 });
 
+test("workflow preview names every tool added or removed between compatibility surfaces", async () => {
+	const previews: Array<{ title: string; message: string }> = [];
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		confirm: async (title: string, message: string) => {
+			previews.push({ title, message });
+			return false;
+		},
+	});
+	const signal = new AbortController().signal;
+
+	assert.equal(
+		await showWorkflowPreview(context.ctx, "blocking-only", "async-only", true, signal),
+		false,
+	);
+	assert.equal(
+		await showWorkflowPreview(context.ctx, "async-only", "blocking-only", true, signal),
+		false,
+	);
+	assert.equal(previews.length, 2);
+	for (const preview of previews) {
+		assert.match(preview.title, /save delegation change and reload/i);
+		assert.match(preview.message, /subagent_spawn/);
+		assert.match(preview.message, /subagent_send/);
+		assert.match(preview.message, /subagent_manage/);
+		assert.match(preview.message, /subagent_mailbox/);
+		assert.match(preview.message, /blocking `subagent`/);
+		assert.match(preview.message, /read-only `subagent_consult`/);
+		assert.doesNotMatch(preview.message, /reusable async lifecycle tools/i);
+	}
+});
+
 test("delegation workflow preview applies async-only on confirmation and cancellation is read-only", async () => {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-workflow-ui-"));
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -352,8 +386,8 @@ test("delegation workflow preview applies async-only on confirmation and cancell
 				reloads++;
 			},
 			custom: async (factory: unknown) => {
-				const inputs = applyCall === 0 ? ["\r"] : applyCall === 1 ? ["\u001b[B", "\r"] : ["\r"];
-				const driven = driveCustomSelector(factory, inputs, 60);
+				if (applyCall >= 2) throw new Error("recommended async-only choice should reload");
+				const driven = driveCustomSelector(factory, ["\r"], 60);
 				applyRenders[applyCall++] = driven.renders.flat();
 				return driven.result;
 			},
@@ -363,7 +397,15 @@ test("delegation workflow preview applies async-only on confirmation and cancell
 		assert.equal(reloads, 1);
 		assert.match(applyContext.notifications.at(-1)?.message ?? "", /run \/reload/i);
 		assert.match(applyRenders[0]?.join("\n") ?? "", /Delegation: All delegation methods/);
-		assert.match(applyRenders[1]?.join("\n") ?? "", /Async only/);
+		assert.match(applyRenders[1]?.join("\n") ?? "", /Async only.*Recommended/i);
+		assert.match(
+			applyRenders[1]?.join("\n") ?? "",
+			/recommended[\s\S]*main agent responsive[\s\S]*blocking delegation and consultation/i,
+		);
+		assert.match(
+			applyRenders[1]?.join("\n") ?? "",
+			/final-answer-dependent detached work needs automatic[\s\S]*resume/i,
+		);
 		assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), {
 			future: true,
 			blocking: { enabled: false },
@@ -386,7 +428,7 @@ test("delegation workflow preview applies async-only on confirmation and cancell
 					cancelCall === 0
 						? ["\r"]
 						: cancelCall === 1
-							? ["\u001b[B", "\r"]
+							? ["\r"]
 							: cancelCall === 2
 								? ["\u001b"]
 								: ["\u001b"];
@@ -427,7 +469,7 @@ test("configured workflow differences reload from the active tool surface", asyn
 			},
 			custom: async (factory: unknown) => {
 				if (call >= 2) throw new Error("workflow should reload after the choice screen");
-				const driven = driveCustomSelector(factory, call === 1 ? ["\u001b[B", "\r"] : ["\r"], 40);
+				const driven = driveCustomSelector(factory, ["\r"], 40);
 				renders[call++] = driven.renders.flat();
 				return driven.result;
 			},
@@ -515,7 +557,6 @@ test("config lifecycle aborts pending confirmations before stateful session hand
 					if (call === 0) {
 						harness.handleInput("tui.select.confirm");
 					} else {
-						harness.handleInput("tui.select.down");
 						harness.handleInput("tui.select.confirm");
 						await harness.waitForPending();
 					}
@@ -587,7 +628,7 @@ test("delegation workflow blocks reload while detached agents are retained", asy
 				reloads++;
 			},
 			custom: async (factory: unknown) => {
-				const inputs = call === 0 ? ["\r"] : call === 1 ? ["\u001b[B", "\r"] : ["\u001b"];
+				const inputs = call === 0 || call === 1 ? ["\r"] : ["\u001b"];
 				call++;
 				return driveCustomSelector(factory, inputs, 60).result;
 			},
@@ -627,7 +668,7 @@ test("delegation workflow save failure does not reload or claim application", as
 				reloads++;
 			},
 			custom: async (factory: unknown) => {
-				const inputs = call === 0 ? ["\r"] : call === 1 ? ["\u001b[B", "\r"] : ["\u001b"];
+				const inputs = call === 0 || call === 1 ? ["\r"] : ["\u001b"];
 				call++;
 				return driveCustomSelector(factory, inputs, 60).result;
 			},

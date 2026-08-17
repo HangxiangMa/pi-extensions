@@ -47,6 +47,7 @@ test("delegation workflow settings control the registered tool surface", () => {
 					"subagent_inspect",
 					"subagent_consult",
 				],
+				forbiddenPromptText: undefined,
 			},
 			{
 				name: "async only",
@@ -58,16 +59,19 @@ test("delegation workflow settings control the registered tool surface", () => {
 					"subagent_mailbox",
 					"subagent_inspect",
 				],
+				forbiddenPromptText: /blocking subagent|subagent_consult/i,
 			},
 			{
 				name: "blocking only",
 				settings: { blocking: { enabled: true }, stateful: { enabled: false } },
 				tools: ["subagent", "subagent_inspect", "subagent_consult"],
+				forbiddenPromptText: /subagent_(?:spawn|send|manage|mailbox)/i,
 			},
 			{
 				name: "disabled",
 				settings: { blocking: { enabled: false }, stateful: { enabled: false } },
 				tools: ["subagent_inspect"],
+				forbiddenPromptText: /blocking subagent|subagent_(?:spawn|send|manage|mailbox|consult)/i,
 			},
 		] as const;
 		for (const scenario of cases) {
@@ -80,6 +84,16 @@ test("delegation workflow settings control the registered tool surface", () => {
 				scenario.name,
 			);
 			assert.ok(mock.commands.has("subagents"), `${scenario.name} keeps recovery commands`);
+			const promptMetadata = mock.tools
+				.flatMap((tool) => [
+					tool.promptSnippet,
+					...(Array.isArray(tool.promptGuidelines) ? tool.promptGuidelines : []),
+				])
+				.filter((value): value is string => typeof value === "string")
+				.join("\n");
+			if (scenario.forbiddenPromptText) {
+				assert.doesNotMatch(promptMetadata, scenario.forbiddenPromptText, scenario.name);
+			}
 			if (scenario.name === "async only") {
 				const spawnGuidance = mock.tools.find(
 					(tool) => tool.name === "subagent_spawn",

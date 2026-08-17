@@ -79,13 +79,14 @@ Subprocess cleanup retains process-group SIGTERM/SIGKILL escalation. In-process 
 
 ## Public surface
 
-The default `all` workflow exposes seven tools: blocking `subagent`; detached `subagent_spawn`,
+The compatibility-default `all` workflow exposes seven tools: blocking `subagent`; detached `subagent_spawn`,
 `subagent_send`, `subagent_manage`, and `subagent_mailbox`; metadata-only `subagent_inspect`; and
-synchronous read-only `subagent_consult`. Registration follows workflow capability:
+synchronous read-only `subagent_consult`.
+The user-facing recommendation is `async-only`, while registration follows workflow capability:
 
-- `all`: all seven tools;
-- `async-only`: the four detached tools plus inspection;
-- `blocking-only`: blocking delegation, consultation, and inspection; and
+- `all`: all seven tools as the compatibility default;
+- `async-only`: the four detached tools plus inspection as the recommended workflow;
+- `blocking-only`: blocking delegation, consultation, and inspection as a compatibility workflow; and
 - `disabled`: inspection only.
 
 Within an enabled stateful workflow, lifecycle tool membership does not change after spawn,
@@ -94,10 +95,11 @@ completion, interrupt, close, or mailbox activity, preserving a stable provider 
 `subagent_mailbox` keeps `send | read`; model guidance prefers inspection when the whole operation
 must be read-only.
 
-`subagent` remains the blocking batch API for single, parallel, chain, and fan-in work. The full batch
-is target/trust-preflighted before any child starts. `subagent_spawn` is the detached sidecar API;
-`subagent_send` starts a follow-up turn, while mailbox `send` only queues context. No detached wait
-operation is exposed.
+`subagent` remains the blocking batch API for single, parallel, chain, and fan-in work.
+The full batch is target/trust-preflighted before any child starts.
+`subagent_spawn` is the detached sidecar API, `subagent_send` starts a follow-up turn, `subagent_manage` owns interruption and closure, and mailbox `send` only queues context.
+Their distinct contracts keep the four async lifecycle tools split.
+No detached wait operation is exposed.
 
 `subagent_inspect` reads only pure settings and metadata snapshots. It never starts a child,
 acknowledges mailbox messages, exposes message/history/context content, refreshes providers, or
