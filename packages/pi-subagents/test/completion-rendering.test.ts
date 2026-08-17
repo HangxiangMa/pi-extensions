@@ -86,6 +86,24 @@ test("completion messages collapse to a useful summary and expand to the full sa
 	assert.ok(expandedLines.every((line) => visibleWidth(line) <= 80));
 });
 
+test("expanded completion messages preserve wide graphemes at wrap boundaries", () => {
+	const renderer = registeredRenderer();
+	const lines = render(
+		renderer,
+		{
+			customType: "pi-subagent-completion",
+			content: "ab😀z\nab\tz",
+		},
+		true,
+		5,
+	);
+	const text = stripTerminalSequences(lines.join("\n"));
+	assert.match(text, /😀/u);
+	assert.match(text, /z/u);
+	assert.equal(text.includes("\t"), true);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 5));
+});
+
 test("completion batches collapse to bounded agent rows and expand to the full message", () => {
 	const renderer = registeredRenderer();
 	const completions = Array.from({ length: 7 }, (_, index) => ({

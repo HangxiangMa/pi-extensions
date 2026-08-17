@@ -171,8 +171,19 @@ function hardWrapExact(value: string, width: number): string[] {
 	const columns = visibleWidth(value);
 	if (columns === 0) return [value];
 	const lines: string[] = [];
-	for (let column = 0; column < columns; column += width) {
-		lines.push(sliceByColumn(value, column, width, true));
+	let column = 0;
+	while (column < columns) {
+		const chunk = sliceByColumn(value, column, width, true);
+		const chunkWidth = visibleWidth(chunk);
+		if (chunkWidth > 0) {
+			lines.push(chunk);
+			column += chunkWidth;
+			continue;
+		}
+		const oversized = sliceByColumn(value, column, width, false);
+		const oversizedWidth = visibleWidth(oversized);
+		lines.push("?".repeat(width));
+		column += Math.max(1, oversizedWidth);
 	}
 	return lines;
 }
