@@ -58,4 +58,4 @@ export type {
 	SettingsScreen,
 } from "./types.js";
 
-export const PI_EXTENSION_MENU_API_VERSION = 12;
+export const PI_EXTENSION_MENU_API_VERSION = 13;

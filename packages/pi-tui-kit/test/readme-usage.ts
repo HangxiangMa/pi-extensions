@@ -92,6 +92,14 @@ const reviewChangesScreen: ReviewScreen<Action> = {
 };
 void reviewChangesScreen;
 
+const markdownScreen: ReviewScreen<Action> = {
+	kind: "review",
+	title: "Rendered document",
+	content: "# Formula\n\n$x^2$\n\n```mermaid\nflowchart LR\n A --> B\n```",
+	format: { kind: "markdown", renderLatex: true, renderMermaid: false },
+};
+void markdownScreen;
+
 const menu = defineMenu<State, Screen, Action>({
 	start: "main",
 	screens: {

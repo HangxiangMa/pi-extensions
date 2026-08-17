@@ -9,6 +9,7 @@ import {
 	type MenuScreenComponent,
 	type MenuScreenEvent,
 	type MenuSettingChange,
+	prepareMenuScreenRendering,
 	reviewDialogPages,
 	safeMenuText,
 } from "./components/index.js";
@@ -88,6 +89,11 @@ async function runTuiMenu<
 			const state = loaded.state;
 			const screenId = navigator.current;
 			const screen = resolveMenuScreen(definition, screenId, state);
+			const renderingPreparation = prepareMenuScreenRendering(screen);
+			if (renderingPreparation) {
+				await renderingPreparation;
+				if (!isMenuCurrent(options) || menuSignal.aborted) return { kind: "stale" };
+			}
 			let staleAction = false;
 			const interact = async (interaction: MenuInteraction, interactionSignal?: AbortSignal) => {
 				const invocation = await invokeMenuInteraction({

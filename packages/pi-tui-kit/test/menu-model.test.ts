@@ -8,6 +8,7 @@ import {
 	type MenuBrowseItem,
 	type MenuDefinition,
 	PI_EXTENSION_MENU_API_VERSION,
+	type ReviewFormat,
 	resolveMenuScreen,
 } from "../src/index.js";
 
@@ -40,18 +41,24 @@ function testMenu(): MenuDefinition<State, ScreenId, ActionId> {
 	});
 }
 
-test("package exposes API version 12 and exact browse detail types", () => {
+test("package exposes API version 13 and Markdown document types", () => {
+	const markdown: ReviewFormat = {
+		kind: "markdown",
+		renderLatex: false,
+		renderMermaid: true,
+	};
 	const document: BrowseDetailDocument = {
-		content: "  exact\nbody",
-		format: { kind: "code", language: "json" },
+		content: "# Document\n\n$x^2$",
+		format: markdown,
 	};
 	const item: MenuBrowseItem = {
 		id: "schema",
 		label: "Schema",
 		detailDocument: document,
 	};
+	const apiVersion: 13 = PI_EXTENSION_MENU_API_VERSION;
 	assert.equal(item.detailDocument, document);
-	assert.equal(PI_EXTENSION_MENU_API_VERSION, 12);
+	assert.equal(apiVersion, 13);
 	assert.equal(resolveMenuScreen(testMenu(), "main", { count: 0 }).kind, "actions");
 });
 

@@ -6,6 +6,7 @@ import { test } from "vitest";
 import { createCustomSelectorHarness, createMockContext } from "../../../test/support.js";
 import { createMenuScreenComponent } from "../src/components/index.js";
 import { defineMenu, type ReviewScreen, runMenu } from "../src/index.js";
+import { createTuiHarness } from "../src/testing/index.js";
 
 initTheme("dark", false);
 
@@ -234,6 +235,172 @@ test("review confirmation dispatches raw identity and exits remain Back versus C
 	const close = reviewComponentHarness(reviewScreen);
 	close.component.handleInput("\u0003");
 	assert.deepEqual(close.events, [{ kind: "close" }]);
+});
+
+test("review renders semantic Markdown, LaTeX, code, controls, and cache invalidation", () => {
+	const colorCalls: string[] = [];
+	const harness = reviewComponentHarness(
+		{
+			...reviewScreen,
+			content:
+				"# Formula\n\nInline $x^2 + y^2$.\n\n$$\\frac{a}{b}$$\n\n```ts\nconst answer = 42;\n```\nunsafe\u001b]8;;https://unsafe.example\u0007text\u202ereversed",
+			format: { kind: "markdown", renderMermaid: false },
+			viewportSize: 30,
+			confirm: undefined,
+		},
+		false,
+		40,
+		(color) => colorCalls.push(color),
+	);
+
+	for (const width of [8, 20, 40, 80]) {
+		const lines = harness.component.render(width);
+		assert.ok(
+			lines.every((line) => visibleWidth(line) <= width),
+			`width ${width}`,
+		);
+		assert.equal(lines.join("\n").includes("https://unsafe.example"), false);
+		assert.equal(lines.join("\n").includes("\u202e"), false);
+	}
+	const rendered = plainRender(harness.component, 80);
+	assert.match(rendered, /^Formula\s*$/mu);
+	assert.doesNotMatch(rendered, /^# Formula/mu);
+	assert.match(rendered, /Inline x² \+ y²\./u);
+	assert.match(rendered, /^a\s*\n─\s*\nb\s*$/mu);
+	assert.match(rendered, /const answer = 42;/u);
+	assert.match(rendered, /```ts/u);
+	assert.match(rendered, /unsafetextreversed/u);
+
+	const initialHeadingCalls = colorCalls.filter((color) => color === "mdHeading").length;
+	assert.ok(initialHeadingCalls > 0);
+	harness.component.handleInput("j");
+	harness.component.render(80);
+	assert.equal(colorCalls.filter((color) => color === "mdHeading").length, initialHeadingCalls);
+	const beforeInvalidation = colorCalls.filter((color) => color === "mdHeading").length;
+	harness.component.invalidate();
+	harness.component.render(80);
+	assert.ok(colorCalls.filter((color) => color === "mdHeading").length > beforeInvalidation);
+});
+
+test("review preserves disabled and malformed rich source", () => {
+	const disabled = reviewComponentHarness({
+		...reviewScreen,
+		content: "Disabled $x^2$\n\n```mermaid\nflowchart LR\n A --> B\n```",
+		format: { kind: "markdown", renderLatex: false, renderMermaid: false },
+		confirm: undefined,
+		viewportSize: 20,
+	});
+	const disabledRender = plainRender(disabled.component, 80);
+	assert.match(disabledRender, /Disabled \$x\^2\$/u);
+	assert.match(disabledRender, /flowchart LR/u);
+
+	const malformed = reviewComponentHarness({
+		...reviewScreen,
+		content: "Malformed $\\frac{a}{$",
+		format: { kind: "markdown", renderMermaid: false },
+		confirm: undefined,
+	});
+	assert.match(plainRender(malformed.component, 40), /Malformed \$\\frac\{a\}\{\$/u);
+});
+
+test("review renders fitting Mermaid art lazily and preserves mixed Markdown", async () => {
+	const colors: string[] = [];
+	const tui = createTuiHarness({
+		width: 120,
+		rows: 30,
+		theme: {
+			fg: (color, text) => {
+				colors.push(color);
+				return text;
+			},
+			bold: (text) => text,
+		},
+	});
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const menu = defineMenu<undefined, ScreenId, ActionId>({
+		start: "review",
+		screens: {
+			review: () => ({
+				kind: "review",
+				title: "Mermaid review",
+				content:
+					"Before diagram.\n\n~~~MerMaid\nflowchart LR\n A[plain ` tick] --> B[two `` ticks]\n C[unsafe\u001b]8;;https://unsafe.example\u0007text 你🙂wide]\n~~~\n\nAfter diagram.",
+				format: { kind: "markdown" },
+				viewportSize: "adaptive",
+			}),
+		},
+		actions: { apply: async () => ({ kind: "close" }) },
+	});
+
+	const running = runMenu(context.ctx, menu, { getState: () => undefined });
+	await tui.waitForOpen();
+	const narrow = stripVTControlCharacters(tui.resize({ width: 18 }).join("\n"));
+	assert.match(narrow, /flowchart/u);
+	assert.doesNotMatch(narrow, /https:\/\/unsafe\.example/u);
+	const wide = stripVTControlCharacters(tui.resize({ width: 120 }).join("\n"));
+	assert.match(wide, /Before diagram\./u);
+	assert.match(wide, /After diagram\./u);
+	assert.match(wide, /plain ` tick/u);
+	assert.match(wide, /two `` ticks/u);
+	assert.match(wide, /unsafetext/u);
+	assert.match(wide, /你🙂wide/u);
+	assert.match(wide, /[┌╭].*[┐╮]/u);
+	assert.doesNotMatch(wide, /flowchart LR/u);
+	assert.ok(colors.includes("borderMuted"));
+	tui.press("tui.select.cancel");
+	assert.deepEqual(await running, { kind: "closed", reason: "back" });
+});
+
+test("review preserves Mermaid source and warns when a partial parse is not authoritative", async () => {
+	const tui = createTuiHarness({ width: 100, rows: 30 });
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	const menu = defineMenu<undefined, ScreenId, ActionId>({
+		start: "review",
+		screens: {
+			review: () => ({
+				kind: "review",
+				title: "Mermaid fallbacks",
+				content:
+					"```mermaid\nflowchart LR\n A[Start --> B\n```\n\n```mermaid\npie\n title Unsupported\n```",
+				format: { kind: "markdown" },
+				viewportSize: "adaptive",
+			}),
+		},
+		actions: { apply: async () => ({ kind: "close" }) },
+	});
+
+	const running = runMenu(context.ctx, menu, { getState: () => undefined });
+	await tui.waitForOpen();
+	const rendered = stripVTControlCharacters(tui.render().join("\n"));
+	assert.match(rendered, /flowchart LR/u);
+	assert.match(rendered, /Mermaid diagram not rendered:/u);
+	assert.match(rendered, /pie/u);
+	tui.press("tui.select.cancel");
+	assert.deepEqual(await running, { kind: "closed", reason: "back" });
+});
+
+test("review Markdown reflows and clamps scrolling after width changes", () => {
+	const harness = reviewComponentHarness({
+		...reviewScreen,
+		content: [
+			"# Long document",
+			"",
+			"This paragraph contains enough words to wrap across several narrow terminal rows.",
+			"",
+			"Inline $x^2$ remains readable after resize.",
+		].join("\n"),
+		format: { kind: "markdown", renderMermaid: false },
+		viewportSize: 3,
+		confirm: undefined,
+	});
+	const wide = plainLines(harness.component, 80);
+	harness.component.handleInput("\u001b[F");
+	assert.match(plainRender(harness.component, 80), /x² remains readable/u);
+	const narrow = plainLines(harness.component, 18);
+	assert.ok(narrow.every((line) => visibleWidth(line) <= 18));
+	assert.notDeepEqual(narrow, wide);
+	harness.component.handleInput("\u001b[H");
+	assert.match(plainRender(harness.component, 18), /Long document/u);
 });
 
 test("review formats code and diffs through theme-aware display paths", () => {

@@ -231,6 +231,46 @@ test("browse exact details preserve documents, precedence, search identity, and 
 	assert.match(plainRender(privateSearch.component, 40).join("\n"), /No matching items/u);
 });
 
+test("browse detail documents share semantic Markdown and LaTeX rendering", () => {
+	const screen: MenuScreen<ScreenId, ActionId> = {
+		kind: "browse",
+		title: "Guides",
+		items: [
+			{
+				id: "markdown",
+				label: "Rendered guide",
+				searchText: "formula math",
+				detailDocument: {
+					content: "# Formula guide\n\nThe result is $x^2$.\n\n```ts\nconst answer = 42;\n```",
+					format: { kind: "markdown", renderMermaid: false },
+				},
+			},
+		],
+		viewportSize: "adaptive",
+		hint: "back",
+	};
+	const harness = componentHarness(screen, { rows: 12 });
+	const focusable = harness.component as MenuScreenComponent & Focusable;
+	focusable.focused = true;
+	for (const input of "math") harness.component.handleInput(input);
+	harness.component.handleInput("y");
+
+	for (const width of [10, 24, 60]) {
+		assert.ok(harness.component.render(width).every((line) => visibleWidth(line) <= width));
+	}
+	const rendered = plainRender(harness.component, 60).join("\n");
+	assert.match(rendered, /^Formula guide\s*$/mu);
+	assert.match(rendered, /The result is x²\./u);
+	assert.match(rendered, /const answer = 42;/u);
+	assert.match(rendered, /```ts/u);
+	assert.doesNotMatch(rendered, /# Formula guide/u);
+
+	harness.component.handleInput("q");
+	assert.match(plainRender(harness.component, 60).join("\n"), /math/u);
+	assert.equal(harness.component.render(60).join("\n").includes(CURSOR_MARKER), true);
+	assert.equal(harness.selectionChanges.at(-1), "markdown");
+});
+
 test("browse exact details apply shared code and diff formatting", () => {
 	const screen: MenuScreen<ScreenId, ActionId> = {
 		kind: "browse",

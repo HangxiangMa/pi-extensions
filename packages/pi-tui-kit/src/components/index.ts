@@ -44,6 +44,7 @@ export type {
 	MenuScreenEvent,
 	MenuSettingChange,
 } from "./contracts.js";
+export { prepareMenuScreenRendering } from "./mermaid.js";
 export { actionMenuDialogLabel, safeMenuText } from "./rendering.js";
 export { reviewDialogPages } from "./review.js";
 
