@@ -96,9 +96,9 @@ No package publication, default scheduling change, tag, or release workflow is p
 
 - [x] Built-in and custom agent definitions can declare versioned capabilities, modalities, supported result contracts, authority needs, and verification roles while old definitions remain valid.
 - [x] One transport-neutral `ExecutionPlan` records task requirements, selected agent, declared capability fit, requested and effective tools, cwd and trust decision, workspace mode, transport, model and thinking selection, budgets, and unsupported guarantees.
-- [x] The first planner is deterministic and uses explicit contract requirements rather than task-keyword heuristics or an additional classifier model call.
+- [x] The first execution planner is deterministic and uses explicit contract requirements rather than task-keyword heuristics or an additional classifier model call.
 - [x] **Post-hoc addition:** Audit-only `ExecutionPlan` records a delegation-admission recommendation, benefit hypothesis, task generation, and one of parent-owned direct work, one child, one child plus verification, or bounded multi-child work without changing launch behavior.
-  **Reason:** The original planner audited capability fit but did not answer the roadmap's core question of whether delegation was justified.
+  **Reason:** The original execution planner audited capability fit but did not answer the roadmap's core question of whether delegation was justified.
 - [x] Audit-only planning does not change the caller-selected agent, tools, transport, workspace, or launch result, but it reports mismatch, overgrant, omission, and unsupported-policy findings through bounded details and inspection.
 - [x] Agent catalogs and inspection expose only safe manifest metadata and never expose system prompts, credentials, raw protected paths, or private context.
 - [ ] Baseline evaluation measures capability coverage and permission precision before any enforcement default is considered.

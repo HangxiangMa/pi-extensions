@@ -53,7 +53,6 @@ class FakeTransport implements SubagentTransport {
 test("Subagents idle startup registers every surface without loading deferred implementations", async () => {
 	const mock = createMockPi();
 	const loads = {
-		automation: 0,
 		blocking: 0,
 		config: 0,
 		consult: 0,
@@ -68,12 +67,6 @@ test("Subagents idle startup registers every surface without loading deferred im
 		loadStatefulTransport: async () => {
 			loads.transport += 1;
 			return new FakeTransport();
-		},
-		automation: {
-			loadExecution: async () => {
-				loads.automation += 1;
-				return {} as never;
-			},
 		},
 		config: {
 			loadConfigUi: async () => {
@@ -98,7 +91,6 @@ test("Subagents idle startup registers every surface without loading deferred im
 	await emitAll(mock, "session_start", { reason: "startup" }, context.ctx);
 
 	assert.deepEqual(loads, {
-		automation: 0,
 		blocking: 0,
 		config: 0,
 		consult: 0,
@@ -109,7 +101,6 @@ test("Subagents idle startup registers every surface without loading deferred im
 		[...new Set(mock.tools.map((tool) => tool.name))],
 		[
 			"subagent",
-			"subagent_auto",
 			"subagent_spawn",
 			"subagent_send",
 			"subagent_manage",

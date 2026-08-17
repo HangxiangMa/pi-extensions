@@ -116,7 +116,6 @@ test("legacy scout agent overrides apply to explorer without overriding conflict
 			"grep",
 			"find",
 			"ls",
-			"bash",
 		]);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

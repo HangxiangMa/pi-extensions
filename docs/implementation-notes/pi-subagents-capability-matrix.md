@@ -6,13 +6,12 @@ README owns public schemas and usage; source and focused tests are the executabl
 | Capability | Status and boundary | Evidence |
 | --- | --- | --- |
 | Blocking single/parallel/chain/fan-in | Implemented through `subagent`; the full batch is preflighted before any launch | `src/execution.ts`, `test/subagents.test.ts` |
-| Explicit autonomous workflow planning | `subagent_auto` runs one bounded read-only planner, then a deterministic compiler returns parent-owned/needs-input/rejected or executes the smallest admitted existing workflow | `src/automation*.ts`, `src/workflow-plan-compiler.ts`, automation/compiler tests |
 | Detached addressable agents | Implemented through `subagent_spawn`; completion delivery is next-turn by default or opt-in auto-resume | `src/stateful.ts`, `test/orchestration.test.ts`, `test/completion-delivery.test.ts` |
 | Follow-up and retained lifecycle | Implemented through `subagent_send`, `subagent_manage`, and `subagent_mailbox` | `src/stateful.ts`, registry/orchestration tests |
 | Metadata-only inspection | `subagent_inspect` is registered in every workflow, including disabled delegation; it never launches children or reads/acknowledges mailbox content | `src/inspect.ts`, `test/inspect.test.ts` |
 | Synchronous read-only consultation | `subagent_consult` is registered whenever blocking delegation is enabled; it runs one ephemeral child with extensions disabled and only the effective subset of `read`, `grep`, `find`, and `ls` | `src/consult.ts`, `src/consult-policy.ts`, `test/consult.test.ts` |
-| Default tool surface | Eight tools: `subagent`, `subagent_auto`, `subagent_spawn`, `subagent_send`, `subagent_manage`, `subagent_mailbox`, `subagent_inspect`, and `subagent_consult` | `src/subagents.ts`, `test/subagents.test.ts`, `test/tool-rendering.test.ts` |
-| Workflow-dependent registration | `all`: eight tools; `async-only`: four detached tools plus inspection; `blocking-only`: blocking, autonomous planning, consultation, and inspection; `disabled`: inspection only | exact registration cases in `test/subagents.test.ts` |
+| Default tool surface | Seven tools: `subagent`, `subagent_spawn`, `subagent_send`, `subagent_manage`, `subagent_mailbox`, `subagent_inspect`, and `subagent_consult` | `src/subagents.ts`, registration and rendering tests |
+| Workflow-dependent registration | `all`: seven tools; `async-only`: four detached tools plus inspection; `blocking-only`: blocking delegation, consultation, and inspection; `disabled`: inspection only | exact registration cases in settings UI tests |
 | Deterministic timeout and process cleanup | Implemented with process-group termination and bounded settlement/cleanup | `src/runner.ts`, runner and evolution coverage |
 | Bounded protocol and output | Implemented at both 50 KB and 2,000-line limits for model-facing content and safe projections | `src/protocol.ts`, `src/limits.ts`, rendering/inspection/consultation tests |
 | Abort with partial structured result | Blocking/stateful operations preserve bounded partial results; consultation preserves post-launch evidence/usage and marks the finalized Pi result as an error | runner, consultation, and orchestration tests |
@@ -31,8 +30,8 @@ README owns public schemas and usage; source and focused tests are the executabl
 | Native transcript switching | Core-blocked because Pi exposes no supported child transcript/session switch handle | public SDK boundary review |
 | Approval/sandbox/header inheritance | Unsupported as a general guarantee; reported policy is bounded and explicit | result policy and transport tests |
 | Filesystem isolation | Optional disposable worktree only; shared cwd is default and neither target policy nor consultation resource policy is an OS sandbox | `src/workspace.ts`, README security boundary |
-| Autonomous recursive teams | Rejected; `subagent_auto` permits no workflow grandchildren, at most two concurrent mutating workers, and a bounded revision count | compiler, patch, execution, and recursion tests |
-| Planner-driven graph revisions | Versioned internal patches can change only eligible current-generation work; accepted history, artifacts, and verifier receipts stay immutable and plan identity rotates atomically | `src/workflow-plan-patch.ts`, `test/workflow-plan-patch.test.ts` |
+| Extension-owned autonomous workflow planning | Removed; topology selection belongs to the main agent or caller-authored `subagent.workflow` payloads | built-in catalog and registration tests |
+| Planner-driven graph revisions | Removed with `subagent_auto`; workflow revisions must be caller-authored | no automation planner sources remain |
 
 ## Read-only boundary
 

@@ -21,10 +21,6 @@ import type {
 	DelegationCwdPolicy,
 	SubagentSettings,
 } from "./agents/types.js";
-import {
-	type AutomationRegistrationDependencies,
-	registerSubagentAutomation,
-} from "./automation-registration.js";
 import { cachedModuleLoader, throwIfAborted } from "./cached-module-loader.js";
 import {
 	type ConfigRegistrationDependencies,
@@ -60,7 +56,6 @@ type BlockingExecutionModule = Pick<typeof import("./execution.js"), "executeSub
 export interface SubagentsDependencies {
 	loadBlockingExecution?: () => Promise<BlockingExecutionModule>;
 	loadStatefulTransport?: () => Promise<SubagentTransport>;
-	automation?: AutomationRegistrationDependencies;
 	config?: ConfigRegistrationDependencies;
 	consult?: ConsultRegistrationDependencies;
 	inspect?: InspectRegistrationDependencies;
@@ -78,9 +73,6 @@ export default function (pi: ExtensionAPI, dependencies: SubagentsDependencies =
 	const refreshBlockingCatalog = blockingEnabled
 		? registerBlockingSubagent(pi, () => currentSettings, loadBlockingExecution)
 		: () => undefined;
-	if (blockingEnabled) {
-		registerSubagentAutomation(pi, { getSettings: () => currentSettings }, dependencies.automation);
-	}
 	let refreshStatefulCatalog: (catalog: string) => void = () => undefined;
 	let refreshConsultCatalog: (catalog: string) => void = () => undefined;
 

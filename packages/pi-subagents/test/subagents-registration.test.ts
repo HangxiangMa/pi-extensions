@@ -22,7 +22,6 @@ test("subagents registers consistent blocking guidance and one management comman
 		mock.tools.map((candidate) => candidate.name),
 		[
 			"subagent",
-			"subagent_auto",
 			"subagent_spawn",
 			"subagent_send",
 			"subagent_manage",
@@ -105,18 +104,9 @@ test("subagents registers consistent blocking guidance and one management comman
 	assert.match(parameters?.properties?.maxToolCalls?.description ?? "", /tool calls/i);
 	assert.match(guidanceText, /totalTimeoutMs.*blocking workflow/i);
 	assert.match(guidanceText, /idleTimeoutMs.*stalled/i);
-	const automationTool = mock.tools.find((candidate) => candidate.name === "subagent_auto");
-	assert.ok(automationTool);
-	assert.match(String(automationTool.description), /explicitly opt in/i);
-	assert.match(String(automationTool.description), /two concurrent mutating workers/i);
 	assert.equal(
-		(automationTool.parameters as { additionalProperties?: boolean }).additionalProperties,
-		false,
-	);
-	assert.ok(
-		Buffer.byteLength(JSON.stringify(automationTool.parameters), "utf8") <
-			Buffer.byteLength(JSON.stringify(tool?.parameters), "utf8"),
-		"the dedicated automation schema stays smaller than the multi-mode compatibility schema",
+		mock.tools.find((candidate) => candidate.name === "subagent_auto"),
+		undefined,
 	);
 	assert.deepEqual(
 		[...mock.commands.keys()].filter((name) => name.startsWith("subagents")),

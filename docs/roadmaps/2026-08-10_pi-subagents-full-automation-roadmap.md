@@ -1,6 +1,6 @@
 # Pi Subagents Full Automation Roadmap
 
-- **Status:** Phases 1 and 2 implemented; rolling runtime and production qualification remain planned or deferred.
+- **Status:** Superseded by the decision to remove `subagent_auto` and the built-in `planner`; retained as historical context for verified execution and deferred automation ideas.
 - **Audience:** `@narumitw/pi-subagents` maintainers and contributors.
 - **Planning horizon:** Evidence-qualified phases without delivery dates.
 - **Baseline:** [`Pi Subagents Delegation Intelligence Roadmap`](2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
@@ -8,7 +8,9 @@
 
 ## Vision
 
-Let a user provide one high-level objective while `pi-subagents` selects the smallest justified execution topology, executes dependency-ready work, verifies the exact integrated result independently, performs bounded recovery, and stops with a truthful terminal outcome.
+Historical vision: let a user provide one high-level objective while `pi-subagents` selects the smallest justified execution topology, executes dependency-ready work, verifies the exact integrated result independently, performs bounded recovery, and stops with a truthful terminal outcome.
+
+Current direction: keep topology selection with the main agent or caller-authored `subagent.workflow` requests, while preserving explicit verification and lifecycle safety.
 
 Keep Pi as the owner of model sessions, provider behavior, and tool execution.
 
@@ -27,7 +29,6 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 
 - Structured delegation contracts, typed outcomes, capability manifests, `ExecutionPlan`, capability grants, WorkItem state, artifacts, semantic snapshots, cancellation generations, explicit workflows, panels, retries, hedging, and persistence already exist.
 - Caller-authored `subagent.workflow` remains available for exact graph, scope, verifier, retry, and topology control.
-- The explicit `subagent_auto` surface accepts one bounded objective, uses one read-only planning turn, and deterministically compiles the smallest admitted existing workflow.
 - Explicit `workflow.verifiedExecution` separates execution from acceptance, synthesizes or validates one distinct least-authority verifier, runs executor-owned checks against the exact submitted tree, and permits at most one bounded rework cycle.
 - The blocking verified-workflow path uses `verifyManagedIntegration()` and `WorkItemLedger.acceptIntegration()` before terminal success; worker self-verification cannot satisfy acceptance.
 - The workflow scheduler still selects a batch with `activeCount: 0`, waits for that batch to settle, and then schedules again.
@@ -39,7 +40,7 @@ Keep `pi-subagents` as the owner of delegation planning, workflow state, authori
 | Concern | Current owner | Relationship to earlier plans |
 | --- | --- | --- |
 | Independent acceptance, immutable verification, and bounded rework | [`Verified Execution Loop Plan`](../plans/archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md) | Implemented as the explicit `workflow.verifiedExecution` surface and archived with its verification record. |
-| Objective-to-DAG compilation and graph revision | [`Autonomous Workflow Planning Plan`](../plans/archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) | Implemented as the explicit `subagent_auto` surface without reopening earlier baselines. |
+| Objective-to-DAG compilation and graph revision | [`Autonomous Workflow Planning Plan`](../plans/archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) | Historical only; the explicit `subagent_auto` surface and built-in planner are removed. |
 | Rolling scheduling, recovery, persistence reconciliation, and resume | [`Event-Driven Workflow Runtime Plan`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) | Continues the dependency scheduler and semantic snapshot baseline without duplicating it. |
 | Matched evidence before a default change | [`Minimal Delegation Admission Evaluation Plan`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) | Remains the sole active admission evidence gate. |
 
@@ -74,15 +75,10 @@ The original implementation plans were removed after their durable decisions and
 
 ### Phase 2: Accept one objective and construct the workflow
 
-- [x] An explicit automation mode accepts one objective, constraints, acceptance criteria, and aggregate budget without requiring a caller-authored task graph.
-- [x] A read-only planning turn proposes a bounded typed DAG, while deterministic compilation validates dependencies, scopes, authority, capabilities, artifacts, verification, and hard limits before any mutating child starts.
-- [x] Admission selects the smallest justified topology and can return parent-owned direct work or abstention without allocating an execution child.
-- [x] Capability routing assigns agents and tools from enforceable manifests without silently widening authority.
-- [x] Versioned graph patches can revise pending, rework-requested, or invalidated work after new evidence without replacing accepted history.
+- [x] Historical implementation accepted one objective and compiled a workflow through `subagent_auto`.
+- [x] Superseded: `subagent_auto` and the built-in planner are removed so workflow topology remains explicit and main-agent-authored.
 
-**Outcome:** One high-level request can become a safe executable workflow with no manual topology authoring.
-
-**Completed plan:** [`2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md`](../plans/archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md).
+**Outcome:** Historical only; future work should use caller-authored `subagent.workflow` rather than reviving hidden or extension-owned planning.
 
 ### Phase 3: Run a rolling recoverable workflow runtime
 
@@ -127,7 +123,7 @@ The original implementation plans were removed after their durable decisions and
 | --- | --- | --- |
 | A verifier repeats the worker's blind spot | False confidence can become automated acceptance | Require fresh context, original requirements, raw artifacts, deterministic evidence, and a distinct agent identity. |
 | A verifier mutates the state under review | The receipt can attest to verifier-authored state and bypass the integration owner | Run checks under executor ownership, constrain verifier authority, compare before-and-after state identity, and reject drift. |
-| Planner output invents unsafe dependencies or scopes | Incorrect topology can race writes or omit required evidence | Compile model output through deterministic graph, capability, scope, authority, and artifact validation before allocation. |
+| Future planner output could invent unsafe dependencies or scopes | Incorrect topology could race writes or omit required evidence | Keep planner-driven topology removed unless a future explicit proposal restores deterministic graph, capability, scope, authority, and artifact validation before allocation. |
 | Replanning loops consume budget without progress | Automation can become slower and less reliable than direct work | Bound plan revisions, rework cycles, model calls, total budget, and unchanged-state repetitions. |
 | Rolling scheduling introduces cancellation races | Late results or duplicate work can enter acceptance | Keep one event-loop owner, generation-bound grants, active-task cancellation, and stale-result quarantine. |
 | Restore cannot prove prior side effects | Automatic continuation could duplicate mutations | Resume only current unstarted work or safely revalidated read-only/idempotent work, and stop uncertain mutation. |
@@ -145,10 +141,9 @@ The original implementation plans were removed after their durable decisions and
 
 ## Assumptions and Unknowns
 
-- The first implementation remains opt-in through an explicit automation contract or mode.
+- The former explicit automation contract is removed; any future automation contract would need a new explicit approval and matched evidence.
 - The existing two-mutating-child limit and no-grandchild rule remain hard boundaries.
-- The exact public automation schema, planner model budget, rework bound, and persisted resume selector require provider-compatibility decisions in the owning implementation plans.
-- It remains unknown which repository task classes justify automatic planning after coordination overhead is included.
+- It remains unknown which repository task classes justify extension-owned automatic planning after coordination overhead is included.
 - It remains unknown whether a fresh verifier should always use a different model family or whether distinct context, role, and evidence are sufficient for specific task classes.
 
 ## Decisions and Changes
@@ -157,5 +152,5 @@ The original implementation plans were removed after their durable decisions and
 - **2026-08-10 — Exclude observability expansion:** this roadmap changes execution behavior and correctness gates only, except for bounded evidence required by those gates.
 - **2026-08-10 — Keep full automation explicit:** no default routing change is proposed before matched representative evaluation.
 - **2026-08-10 — Preserve narrow concurrency:** the first automated architecture keeps at most two mutating children and no workflow grandchildren.
-- **2026-08-10 — Complete explicit workflow planning:** `subagent_auto`, deterministic compilation, verified mutating topology, bounded graph patches, and the frozen offline protocol complete Phase 2 without changing defaults or making a live-quality claim.
+- **Superseding decision — Remove explicit workflow planning:** `subagent_auto`, the built-in planner, deterministic objective-to-DAG compilation, and graph patches are removed; callers should use explicit `subagent.workflow` when they need a graph.
 - **2026-08-10 — Complete authoritative verified execution:** explicit verified workflows now require executor-owned exact-tree checks, managed integration acceptance, current independent receipts, and at most one bounded rework cycle without changing omitted workflow behavior.
