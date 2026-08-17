@@ -213,6 +213,9 @@ export function normalizeLangfuseConfig(
 	if (!release.ok) return release;
 	const userId = optionalString(input.userId, "userId");
 	if (!userId.ok) return userId;
+	if (userId.value && userId.value.length > 200) {
+		return { ok: false, reason: "pi-langfuse.json userId must be at most 200 characters." };
+	}
 
 	return {
 		ok: true,
