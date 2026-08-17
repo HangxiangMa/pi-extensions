@@ -68,7 +68,7 @@ You can also create the file manually:
 
 `publicKey` and `secretKey` are required literal strings. Environment-variable and command interpolation are intentionally unsupported. `baseUrl` defaults to `https://us.cloud.langfuse.com`; regional and self-hosted HTTP or HTTPS endpoints are supported. Prefer HTTPS because HTTP sends Langfuse credentials and trace content without transport encryption.
 
-`environment`, `release`, and `userId` are optional Langfuse trace attributes. An environment must match Langfuse's contract: at most 40 lowercase letters, numbers, hyphens, or underscores, and it cannot start with `langfuse`. `userId` populates the Langfuse user dimension, which is what the Sessions and Traces views group by; leave it unset to report no user. It is read when a session starts and is not part of the tracer runtime fingerprint, so a changed `userId` applies to the next session without restarting Pi. Set `captureContent` to `false` to trace timing, model, usage, cost, status, and bounded diagnostic metadata without sending prompts, provider-request snapshots, responses, or tool content.
+`environment`, `release`, and `userId` are optional Langfuse trace attributes. An environment must match Langfuse's contract: at most 40 lowercase letters, numbers, hyphens, or underscores, and it cannot start with `langfuse`. `userId` populates the Langfuse user dimension, which is what the Sessions and Traces views group by; Langfuse accepts at most 200 characters, and leaving it unset reports no user. Set `captureContent` to `false` to trace timing, model, usage, cost, status, and bounded diagnostic metadata without sending prompts, provider-request snapshots, responses, or tool content.
 
 The extension automatically restricts an existing config file to mode `0600` and refuses to load credentials if that protection cannot be enforced. You can also set it explicitly:
 
@@ -76,7 +76,7 @@ The extension automatically restricts an existing config file to mode `0600` and
 chmod 600 ~/.pi/agent/pi-langfuse.json
 ```
 
-Restart Pi after changing credentials, endpoint, environment, release, or `captureContent`. The isolated OpenTelemetry tracer provider is initialized once per Pi process and selected only for Langfuse; it does not replace Pi's process-global provider or send Langfuse observations to another extension's exporter.
+Restart Pi after changing credentials, endpoint, environment, release, or `captureContent`. Changes to `userId` apply to new sessions without restarting Pi. The isolated OpenTelemetry tracer provider is initialized once per Pi process and selected only for Langfuse; it does not replace Pi's process-global provider or send Langfuse observations to another extension's exporter.
 
 ## 🔭 What is traced
 
@@ -167,7 +167,7 @@ includes current tracing state and the manual configuration path.
 
 With content capture enabled, traces can contain user prompts, model responses, tool arguments, and tool results. These may include source code, file contents, shell output, or other sensitive project data. Review your Langfuse retention and access controls before enabling this extension.
 
-Git branch names, commit ids, working directory, session/leaf ids, model identity, usage/cost, aggregate counts, and allowlisted response-header values are metadata. They remain exported when `captureContent` is `false`; branch names and diagnostic header values can themselves contain operational details.
+Git branch names, commit ids, working directory, session/leaf ids, the configured `userId`, model identity, usage/cost, aggregate counts, and allowlisted response-header values are metadata. They remain exported when `captureContent` is `false`; branch names and diagnostic header values can themselves contain operational details, and a `userId` may itself be personally identifying if you set it to an email address or a real name. Choose a pseudonymous value when that matters, or leave `userId` unset to export no user at all.
 
 The built-in mask specifically protects Langfuse credentials; it is not a general secret scanner. Set `"captureContent": false` in `pi-langfuse.json` when prompts, provider-request snapshots, responses, and tool content must remain local. Compaction summaries, tool partial results, opaque continuation signatures, authorization headers, cookies, and unapproved response headers are never exported in either mode.
 
