@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { resolveCompletionRecipient } from "../src/completion-routing.js";
 import { AgentRegistry } from "../src/registry.js";
 import { buildDetachedCompletionMessage } from "../src/stateful.js";
 import { record } from "./registry-test-helpers.js";
@@ -109,6 +110,130 @@ test("AgentRegistry retries terminal persistence before resolving or notifying",
 	assert.equal(settled.agent.state, "completed");
 	assert.equal(terminalAttempts, 2);
 	assert.equal(notified.length, 1);
+});
+
+test("nested completions target the direct parent and remain pending until exact context visibility", async () => {
+	const registry = new AgentRegistry(async (_agent, task) => ({
+		output: `done:${task}`,
+		exitCode: 0,
+	}));
+	const parent = await registry.spawn({
+		agent: "explorer",
+		taskName: "parent",
+		task: "parent",
+		cwd: process.cwd(),
+	});
+	await registry.wait(parent.id, 100);
+	const child = await registry.spawn({
+		agent: "worker",
+		taskName: "child",
+		task: "child",
+		cwd: process.cwd(),
+		parentId: parent.id,
+	});
+	await registry.wait(child.id, 100);
+	const completion = registry.listPendingCompletions().find((item) => item.agent.id === child.id);
+	assert.equal(completion?.recipientId, parent.id);
+	assert.equal(completion?.recipientPath, parent.taskPath);
+	const parentMessages = await registry.readMessages(parent.id, false);
+	const envelope = parentMessages.find(
+		(message) => message.deduplicationKey === completion?.completionId,
+	);
+	assert.equal(envelope?.completionId, completion?.completionId);
+	assert.match(envelope?.content ?? "", /done:child/);
+	assert.ok(
+		registry
+			.listPendingCompletions()
+			.some((item) => item.completionId === completion?.completionId),
+	);
+	await registry.acknowledgeVisibleMessages(
+		parent.id,
+		envelope ? [envelope.id] : [],
+		completion ? [completion.completionId] : [],
+		Date.now(),
+	);
+	assert.ok(
+		!registry
+			.listPendingCompletions()
+			.some((item) => item.completionId === completion?.completionId),
+	);
+	await registry.shutdown();
+});
+
+test("simultaneous sibling completions remain distinct and target the same direct parent", async () => {
+	const registry = new AgentRegistry(async (_agent, task) => ({ output: task, exitCode: 0 }));
+	const parent = await registry.spawn({
+		agent: "worker",
+		taskName: "parent",
+		task: "parent",
+		cwd: process.cwd(),
+	});
+	await registry.wait(parent.id, 100);
+	const [first, second] = await Promise.all([
+		registry.spawn({
+			agent: "worker",
+			taskName: "first",
+			task: "first",
+			cwd: process.cwd(),
+			parentId: parent.id,
+		}),
+		registry.spawn({
+			agent: "worker",
+			taskName: "second",
+			task: "second",
+			cwd: process.cwd(),
+			parentId: parent.id,
+		}),
+	]);
+	await Promise.all([registry.wait(first.id, 100), registry.wait(second.id, 100)]);
+	const siblingCompletions = registry
+		.listPendingCompletions()
+		.filter((completion) => completion.agent.parentId === parent.id);
+	assert.equal(siblingCompletions.length, 2);
+	assert.equal(new Set(siblingCompletions.map((completion) => completion.completionId)).size, 2);
+	assert.ok(siblingCompletions.every((completion) => completion.recipientId === parent.id));
+	await registry.shutdown();
+});
+
+test("completion routing falls back through a closed parent to the nearest live ancestor", () => {
+	const agents = new Map([
+		[
+			"grandparent",
+			{
+				id: "grandparent",
+				state: "completed" as const,
+				taskPath: "/root/grandparent",
+			},
+		],
+		[
+			"parent",
+			{
+				id: "parent",
+				parentId: "grandparent",
+				state: "closed" as const,
+				taskPath: "/root/grandparent/parent",
+			},
+		],
+	]);
+	assert.deepEqual(
+		resolveCompletionRecipient({ id: "child", parentId: "parent" }, (id) => agents.get(id)),
+		{ recipientId: "grandparent", recipientPath: "/root/grandparent" },
+	);
+});
+
+test("top-level completions target root without creating a retained mailbox recipient", async () => {
+	const registry = new AgentRegistry(async () => ({ output: "done", exitCode: 0 }));
+	const agent = await registry.spawn({
+		agent: "worker",
+		taskName: "worker",
+		task: "task",
+		cwd: process.cwd(),
+	});
+	await registry.wait(agent.id, 100);
+	const completion = registry.listPendingCompletions()[0];
+	assert.equal(completion?.recipientId, "root");
+	assert.equal(completion?.recipientPath, "/root");
+	await registry.shutdown();
 });
 
 test("detached completion messages retain bounded task, partial output, and errors after redaction", () => {

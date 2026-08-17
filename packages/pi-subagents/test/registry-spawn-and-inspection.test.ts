@@ -21,6 +21,10 @@ test("spawn idempotency includes retained execution budgets", () => {
 	assert.notEqual(hashSpawnRequest(request), hashSpawnRequest({ ...request, idleTimeoutMs: 500 }));
 	assert.notEqual(hashSpawnRequest(request), hashSpawnRequest({ ...request, maxTurns: 3 }));
 	assert.notEqual(hashSpawnRequest(request), hashSpawnRequest({ ...request, maxToolCalls: 4 }));
+	assert.notEqual(
+		hashSpawnRequest(request),
+		hashSpawnRequest({ ...request, taskName: "research" }),
+	);
 	const { timeoutMs: _omitted, ...withoutTimeout } = request;
 	const legacyHash = createHash("sha256")
 		.update(
@@ -170,6 +174,8 @@ test("AgentRegistry exposes metadata-only inspection snapshots", async () => {
 	assert.equal(listed.length, 1);
 	assert.deepEqual(listed[0], {
 		id: spawned.id,
+		taskName: spawned.taskName,
+		taskPath: spawned.taskPath,
 		agent: "explorer",
 		state: "running",
 		createdAt: spawned.createdAt,

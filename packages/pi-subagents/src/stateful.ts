@@ -48,6 +48,7 @@ import { assertCurrentSpawn, waitForOwnedSpawn } from "./stateful-lifecycle.js";
 import { resolveStatefulLimits, type StatefulLimits } from "./stateful-limits.js";
 import { createStatefulToolRenderer } from "./stateful-render.js";
 import { confirmProjectAgent } from "./stateful-safety.js";
+import { MAX_TASK_NAME_LENGTH } from "./task-path.js";
 import { MAX_SUBAGENT_TOOL_CALLS, MAX_SUBAGENT_TURNS } from "./turn-budget.js";
 
 export { isWriteCapable } from "./stateful-safety.js";
@@ -65,6 +66,7 @@ type StateLifecycleModule = typeof import("./stateful-lifecycle.js");
 
 type StatefulSessionModules = {
 	broker: typeof import("./completion-delivery.js");
+	peerCommunication: typeof import("./peer-communication.js");
 	context: typeof import("./context.js");
 	transport: typeof import("./create-stateful-transport.js");
 	cwdPolicy: CwdPolicyModule;
@@ -92,6 +94,7 @@ let workspaceModule: Promise<typeof import("./workspace.js")> | undefined;
 function loadStatefulSessionModules(): Promise<StatefulSessionModules> {
 	statefulSessionModules ??= Promise.all([
 		import("./completion-delivery.js"),
+		import("./peer-communication.js"),
 		import("./context.js"),
 		import("./create-stateful-transport.js"),
 		import("./cwd-policy.js"),
@@ -99,15 +102,27 @@ function loadStatefulSessionModules(): Promise<StatefulSessionModules> {
 		import("./registry.js"),
 		import("./stateful-lifecycle.js"),
 	])
-		.then(([broker, context, transport, cwdPolicy, persistence, registry, lifecycle]) => ({
-			broker,
-			context,
-			transport,
-			cwdPolicy,
-			persistence,
-			registry,
-			lifecycle,
-		}))
+		.then(
+			([
+				broker,
+				peerCommunication,
+				context,
+				transport,
+				cwdPolicy,
+				persistence,
+				registry,
+				lifecycle,
+			]) => ({
+				broker,
+				peerCommunication,
+				context,
+				transport,
+				cwdPolicy,
+				persistence,
+				registry,
+				lifecycle,
+			}),
+		)
 		.catch((error: unknown) => {
 			statefulSessionModules = undefined;
 			throw error;
@@ -258,6 +273,7 @@ export function registerStatefulSubagents(
 	let runtimeLimits = resolveStatefulLimits(settings);
 	let agentCatalog = "";
 	let completionBroker: CompletionDeliveryBroker | undefined;
+	let peerBroker: import("./peer-communication.js").PeerCommunicationBroker | undefined;
 	let refreshSpawnToolRegistration: (() => void) | undefined;
 	let registry: AgentRegistry | undefined;
 	let persistence: AgentPersistence | undefined;
@@ -353,6 +369,8 @@ export function registerStatefulSubagents(
 		const generation = ++runtimeGeneration;
 		completionBroker?.close();
 		completionBroker = undefined;
+		const previousPeerBroker = peerBroker;
+		peerBroker = undefined;
 		if (sweepTimer) clearInterval(sweepTimer);
 		sweepTimer = undefined;
 		const previousRegistry = registry;
@@ -362,6 +380,7 @@ export function registerStatefulSubagents(
 		seenMessageIds.clear();
 		pendingIdempotentSpawns.clear();
 		const initialize = async () => {
+			await previousPeerBroker?.close();
 			const currentWorkspaceManager = await getWorkspaceManager();
 			const modules = await loadStatefulSessionModules();
 			const cleanupErrors = await modules.lifecycle.disposeStatefulRuntime(
@@ -388,6 +407,7 @@ export function registerStatefulSubagents(
 				maxStoredAgents: nextLimits.maxStoredAgents,
 			});
 			let nextRegistry: AgentRegistry;
+			let transport: import("./transport.js").SubagentTransport;
 			const sessionBroker = new modules.broker.CompletionDeliveryBroker(
 				pi,
 				ctx,
@@ -412,12 +432,42 @@ export function registerStatefulSubagents(
 					},
 				},
 			);
-			const transport = modules.transport.createStatefulTransport({
+			const sessionPeerBroker = new modules.peerCommunication.PeerCommunicationBroker({
+				getRegistry: () => nextRegistry,
+				sendRoot: ({ message, senderPath }) => {
+					pi.appendEntry("pi-subagent-peer-message", {
+						messageId: message.id,
+						senderId: message.senderId,
+						senderPath,
+						content: modules.context.redactPrivateText(message.content),
+					});
+					pi.sendMessage(
+						{
+							customType: "pi-subagent-peer-message",
+							content: [
+								"Message Type: SUBAGENT_PEER_MESSAGE",
+								"Protocol: pi-subagents:v1",
+								`Message ID: ${message.id}`,
+								`Sender ID: ${message.senderId}`,
+								`Sender Path: ${senderPath}`,
+								"Payload:",
+								message.content,
+							].join("\n"),
+							display: true,
+							details: { ...message, senderPath },
+						},
+						{ deliverAs: "steer", triggerTurn: false },
+					);
+				},
+				dispatch: (recipient, message) => transport.deliverMessage?.(recipient, message) ?? false,
+			});
+			transport = modules.transport.createStatefulTransport({
 				kind: transportKind,
 				modelRegistry: ctx.modelRegistry,
 				getParentRuntime: () => ({ ...parentRuntime }),
 				getSettings: getCurrentSettings,
 				createInProcessSession: dependencies.createInProcessSession,
+				peerRuntime: sessionPeerBroker,
 				loadTransport: dependencies.loadTransport,
 			});
 			nextRegistry = new modules.registry.AgentRegistry(transport, {
@@ -441,11 +491,27 @@ export function registerStatefulSubagents(
 								recipientId: message.recipientId,
 								content: modules.context.redactPrivateText(message.content).slice(0, 160),
 							});
+							if (
+								agent.state === "running" &&
+								message.deduplicationKey?.startsWith("completion:")
+							) {
+								try {
+									await transport.deliverMessage?.(agent, {
+										...message,
+										content: modules.context.redactPrivateText(message.content),
+									});
+								} catch {
+									// The durable parent mailbox remains the retry path for the next turn.
+								}
+								if (generation !== runtimeGeneration) return;
+							}
 						}
 					}
 				},
 				onTurnComplete: (completion) => {
-					if (generation === runtimeGeneration) sessionBroker.enqueue(completion);
+					if (generation === runtimeGeneration && completion.recipientId === "root") {
+						sessionBroker.enqueue(completion);
+					}
 				},
 			});
 			const persisted = sessionPersistence.load();
@@ -453,6 +519,12 @@ export function registerStatefulSubagents(
 				persisted,
 				currentWorkspaceManager,
 			);
+			if (generation !== runtimeGeneration) {
+				sessionBroker.close();
+				await sessionPeerBroker.close();
+				await modules.lifecycle.disposeStatefulRuntime(nextRegistry, currentWorkspaceManager);
+				return;
+			}
 			if (ctx.hasUI && orphanCleanupFailures > 0) {
 				ctx.ui.notify("Some orphaned subagent worktrees could not be cleaned", "warning");
 			}
@@ -483,14 +555,16 @@ export function registerStatefulSubagents(
 			nextRegistry.restore(restored);
 			if (generation !== runtimeGeneration) {
 				sessionBroker.close();
+				await sessionPeerBroker.close();
 				await modules.lifecycle.disposeStatefulRuntime(nextRegistry, currentWorkspaceManager);
 				return;
 			}
 			registry = nextRegistry;
 			persistence = sessionPersistence;
 			completionBroker = sessionBroker;
+			peerBroker = sessionPeerBroker;
 			for (const completion of nextRegistry.listPendingCompletions()) {
-				sessionBroker.enqueue(completion);
+				if (completion.recipientId === "root") sessionBroker.enqueue(completion);
 			}
 			runtimeLimits = nextLimits;
 			refreshSpawnToolRegistration?.();
@@ -536,6 +610,8 @@ export function registerStatefulSubagents(
 		runtimeGeneration++;
 		completionBroker?.close();
 		completionBroker = undefined;
+		const previousPeerBroker = peerBroker;
+		peerBroker = undefined;
 		if (sweepTimer) clearInterval(sweepTimer);
 		sweepTimer = undefined;
 		const previousRegistry = registry;
@@ -545,6 +621,7 @@ export function registerStatefulSubagents(
 		seenMessageIds.clear();
 		pendingIdempotentSpawns.clear();
 		const shutdown = async () => {
+			await previousPeerBroker?.close();
 			const currentWorkspaceManager = await getWorkspaceManager();
 			const { disposeStatefulRuntime } = await import("./stateful-lifecycle.js");
 			const errors = await disposeStatefulRuntime(previousRegistry, currentWorkspaceManager);
@@ -558,7 +635,7 @@ export function registerStatefulSubagents(
 	});
 
 	const baseSpawnDescription = () =>
-		`Start an addressable background subagent with an optional thinking level and execution budgets chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
+		`Start an addressable background subagent with an opaque agentId and canonical taskPath, plus an optional thinking level and execution budgets chosen for the task difficulty, return immediately with an agentId, and receive its completion asynchronously. Detached capacity: ${runtimeLimits.maxAgents} retained agents, ${runtimeLimits.maxActiveTurns} active turns, ${runtimeLimits.maxChildrenPerAgent} direct children per agent, and depth ${runtimeLimits.maxDepth}. Working-directory target policy: ${dependencies.getSettings?.()?.cwdPolicy?.delegation ?? DEFAULT_DELEGATION_CWD_POLICY}. This controls launch targets and protected project resources, not filesystem access or sandboxing.`;
 	const spawnTool = defineTool({
 		name: "subagent_spawn",
 		label: "Spawn Subagent",
@@ -567,6 +644,15 @@ export function registerStatefulSubagents(
 		promptGuidelines: createSpawnPromptGuidelines(completionDelivery, blockingEnabled),
 		parameters: Type.Object({
 			agent: Type.String({ minLength: 1 }),
+			taskName: Type.Optional(
+				Type.String({
+					minLength: 1,
+					maxLength: MAX_TASK_NAME_LENGTH,
+					pattern: "^[a-z0-9_]+$",
+					description:
+						"Canonical path segment for this task; use lowercase letters, digits, and underscores.",
+				}),
+			),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
 			thinkingLevel: Type.Optional(StatefulThinkingLevelSchema),
 			timeoutMs: Type.Optional(StatefulTimeoutSchema),
@@ -578,7 +664,9 @@ export function registerStatefulSubagents(
 			contextEntryIds: Type.Optional(
 				Type.Array(Type.String(), { description: "Optional selected session entry IDs." }),
 			),
-			parentId: Type.Optional(Type.String({ description: "Optional parent agent ID." })),
+			parentId: Type.Optional(
+				Type.String({ description: "Optional parent agent ID or canonical task path." }),
+			),
 			allowConcurrentWrites: Type.Optional(
 				Type.Boolean({
 					description:
@@ -679,6 +767,7 @@ export function registerStatefulSubagents(
 			assertCurrentSpawn(signal, generation, runtimeGeneration);
 			const requestHash = modules.spawnIdempotency.hashSpawnRequest({
 				agent: params.agent,
+				taskName: params.taskName,
 				task: params.task,
 				cwd,
 				agentScope: scope,
@@ -767,6 +856,7 @@ export function registerStatefulSubagents(
 					);
 					agent = await ownedRegistry.spawn({
 						agent: params.agent,
+						taskName: params.taskName,
 						task: params.task,
 						cwd: workspace?.path ?? requestedCwd,
 						agentScope: scope,
@@ -809,7 +899,7 @@ export function registerStatefulSubagents(
 						: "The current response must not depend on the result because next-turn delivery will not wake an idle root.";
 				return result(
 					agent,
-					`Spawned ${agent.agent} as ${agent.id}. Continue the identified non-overlapping local work immediately; do not merely announce the spawn or end while useful local work remains. Only an explicit user-requested specialist model, tool-profile, or isolation exception may lack concurrent local work. ${deliveryNote} Do not poll for progress.`,
+					`Spawned ${agent.agent} as ${agent.taskPath ?? agent.id} (${agent.id}). Continue the identified non-overlapping local work immediately; do not merely announce the spawn or end while useful local work remains. Only an explicit user-requested specialist model, tool-profile, or isolation exception may lack concurrent local work. ${deliveryNote} Do not poll for progress.`,
 				);
 			} catch (error) {
 				rejectPending?.(error);
@@ -839,7 +929,7 @@ export function registerStatefulSubagents(
 			"Send follow-up work to a reusable retained subagent and start a new turn. Semantic resource skew requires explicit revalidation. Use subagent_mailbox for queue-only messages.",
 		promptSnippet: "Start a new detached follow-up turn on a retained subagent",
 		parameters: Type.Object({
-			agentId: Type.String(),
+			agentId: Type.String({ description: "Retained agent ID or canonical task path." }),
 			task: Type.String({ minLength: 1, maxLength: DEFAULT_MAX_CONTEXT_BYTES }),
 			timeoutMs: Type.Optional(
 				Type.Integer({

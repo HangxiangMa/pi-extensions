@@ -190,6 +190,27 @@ test("RPC launch arguments preserve model, thinking, tools, trust, and role poli
 		"--approve",
 		"--no-tools",
 	]);
+	const peerBridge = buildRpcArgs(
+		managedAgent(),
+		{
+			name: "worker",
+			description: "work",
+			tools: ["read"],
+			systemPrompt: "",
+			source: "built-in",
+			filePath: "built-in:worker",
+		},
+		{ model: undefined, thinkingLevel: "off" },
+		undefined,
+		[],
+		true,
+	);
+	assert.ok(peerBridge.includes("-e"));
+	assert.match(peerBridge[peerBridge.indexOf("-e") + 1] ?? "", /child-peer-bridge\.ts$/u);
+	assert.equal(
+		peerBridge[peerBridge.indexOf("--tools") + 1],
+		"read,subagent_peer_send,subagent_peer_list",
+	);
 });
 
 test("RpcProtocolClient uses strict JSONL and the get_state readiness handshake", async () => {
@@ -288,8 +309,22 @@ test("RpcTransport retains one child across turns and reports pi-subagents:v1 te
 		let creations = 0;
 		let rolePromptPath: string | undefined;
 		const resourceRequests: Array<{ cwd: string; trusted: boolean }> = [];
+		const revoked: string[] = [];
 		const transport = new RpcTransport({
 			getParentRuntime: () => ({ model: undefined, thinkingLevel: "medium" }),
+			peerRuntime: {
+				async send() {
+					throw new Error("unused");
+				},
+				list: () => [],
+				async acknowledge() {},
+				async issueCredentials() {
+					return { host: "127.0.0.1", port: 12345, token: "rpc-token", generation: 1 };
+				},
+				revoke(agentId) {
+					revoked.push(agentId);
+				},
+			},
 			resolvePromptResources: async (cwd, trusted) => {
 				resourceRequests.push({ cwd, trusted });
 				return {
@@ -327,11 +362,48 @@ test("RpcTransport retains one child across turns and reports pi-subagents:v1 te
 		assert.equal(creations, 1);
 		await transport.release?.(agent);
 		assert.equal(rolePromptPath ? existsSync(rolePromptPath) : true, false);
+		assert.deepEqual(revoked, [agent.id]);
 		await transport.release?.(agent);
 		await transport.shutdown();
+		assert.deepEqual(revoked, [agent.id]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("RpcTransport revokes peer credentials and removes role prompts after partial startup failure", async () => {
+	let rolePromptPath: string | undefined;
+	const revoked: string[] = [];
+	const transport = new RpcTransport({
+		getParentRuntime: () => ({ model: undefined, thinkingLevel: "low" }),
+		peerRuntime: {
+			async send() {
+				throw new Error("unused");
+			},
+			list: () => [],
+			async acknowledge() {},
+			async issueCredentials() {
+				return { host: "127.0.0.1", port: 12345, token: "partial-token", generation: 1 };
+			},
+			revoke(agentId) {
+				revoked.push(agentId);
+			},
+		},
+		resolvePromptResources: async () => ({ appendSystemPromptPaths: [] }),
+		createClient(options) {
+			const roleIndex = options.args.lastIndexOf("--append-system-prompt");
+			rolePromptPath = roleIndex >= 0 ? options.args[roleIndex + 1] : undefined;
+			throw new Error("client construction failed");
+		},
+	});
+	const agent = managedAgent();
+	const result = await transport.runTurn(agent, "fail", new AbortController().signal);
+	assert.equal(result.exitCode, 1);
+	assert.match(result.error ?? "", /client construction failed/);
+	assert.ok(rolePromptPath);
+	assert.equal(rolePromptPath ? existsSync(rolePromptPath) : true, false);
+	assert.deepEqual(revoked, [agent.id]);
+	await transport.shutdown();
 });
 
 test("RpcProtocolClient aborts readiness and rejects malformed protocol records", async () => {

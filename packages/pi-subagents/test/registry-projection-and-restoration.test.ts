@@ -36,7 +36,23 @@ test("AgentRegistry restores valid records inertly and rejects cyclic hierarchy"
 	const registry = new AgentRegistry(async () => ({ output: "", exitCode: 0 }));
 	registry.restore([
 		record({ state: "running", currentTask: "must not resume" }),
-		record({ id: "child", rootId: "wrong", parentId: "sa_test", depth: 99 }),
+		record({
+			id: "child",
+			rootId: "wrong",
+			parentId: "sa_test",
+			depth: 99,
+			turnGeneration: 1,
+			pendingCompletions: [
+				{
+					completionId: "completion:restored-child:1",
+					runId: "run:restored-child:1",
+					generation: 1,
+					task: "restored child",
+					output: "restored result",
+					createdAt: 2,
+				},
+			],
+		}),
 		record({ id: "cycle-a", rootId: "cycle-a", parentId: "cycle-b", depth: 1 }),
 		record({ id: "cycle-b", rootId: "cycle-a", parentId: "cycle-a", depth: 2 }),
 	]);
@@ -46,6 +62,16 @@ test("AgentRegistry restores valid records inertly and rejects cyclic hierarchy"
 	assert.deepEqual(restored?.children, ["child"]);
 	assert.equal(registry.get("child")?.rootId, "sa_test");
 	assert.equal(registry.get("child")?.depth, 1);
+	const restoredCompletion = registry
+		.listPendingCompletions()
+		.find((completion) => completion.agent.id === "child");
+	assert.equal(restoredCompletion?.recipientId, "sa_test");
+	assert.equal(
+		registry
+			.get("sa_test")
+			?.mailbox.some((message) => message.completionId === restoredCompletion?.completionId),
+		true,
+	);
 	assert.equal(registry.get("cycle-a"), undefined);
 	assert.equal(registry.get("cycle-b"), undefined);
 });
