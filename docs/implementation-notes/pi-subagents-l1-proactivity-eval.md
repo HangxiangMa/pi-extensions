@@ -26,10 +26,13 @@ The policy remains tool prompt metadata and documentation, not autonomous tool s
 
 ## Decision matrix
 
+The rows below preserve the historical evaluated expectations.
+Current replacements are noted above and were not re-evaluated in this historical record.
+
 | # | Prompt/shape | Expected | Result |
 | --- | --- | --- | --- |
-| 1 | Audit a completed branch for release blockers needed in the current response. | Prefer main-agent review skill; use blocking or detached custom verifier agents only when independent child review is justified. | PASS |
-| 2 | Research auth, database, and API modules for a later decision. | Prefer one detached `explorer` covering related branches; add concurrency only when work and workspace policy are truly independent. | PASS |
+| 1 | Audit a completed branch for release blockers needed in the current response. | Use blocking review under default next-turn delivery; prefer one detached reviewer under auto-resume. | PASS |
+| 2 | Research auth, database, and API modules for a later decision. | Prefer one detached scout covering related branches; add concurrency only when work and workspace policy are truly independent. | PASS |
 | 3 | Implement, then independently verify. | Implement locally/serially, then request independent review. | PASS |
 | 4 | Explain one README sentence. | No subagent. | PASS |
 | 5 | Rename one symbol in one file. | No subagent. | PASS |
