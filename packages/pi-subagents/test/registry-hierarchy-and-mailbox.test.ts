@@ -67,6 +67,28 @@ test("AgentRegistry delivers unread mailbox messages to only the next follow-up 
 	assert.deepEqual(delivered, [[], [message.id], []]);
 });
 
+test("AgentRegistry includes and acknowledges at most the 20 mailbox messages visible to a turn", async () => {
+	const delivered: string[][] = [];
+	const registry = new AgentRegistry(async (agent) => {
+		delivered.push(agent.currentMailboxMessageIds ?? []);
+		return { output: "done", exitCode: 0 };
+	});
+	const agent = await registry.spawn({ agent: "explorer", task: "initial", cwd: process.cwd() });
+	await registry.wait(agent.id, 100);
+	const messageIds: string[] = [];
+	for (let index = 0; index < 25; index++) {
+		messageIds.push((await registry.sendMessage(agent.id, `message ${index}`)).id);
+	}
+	await registry.followUp(agent.id, "consume bounded mailbox");
+	await registry.wait(agent.id, 100);
+	assert.deepEqual(delivered[1], messageIds.slice(-20));
+	assert.deepEqual(
+		(await registry.readMessages(agent.id, false)).map((message) => message.id),
+		messageIds.slice(0, 5),
+	);
+	await registry.shutdown();
+});
+
 test("AgentRegistry preserves hierarchy and delivers bounded deduplicated mailbox messages", async () => {
 	const registry = new AgentRegistry(
 		async (_agent, task) => ({ output: `done:${task}`, exitCode: 0 }),

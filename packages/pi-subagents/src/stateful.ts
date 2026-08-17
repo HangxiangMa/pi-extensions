@@ -496,7 +496,10 @@ export function registerStatefulSubagents(
 								message.deduplicationKey?.startsWith("completion:")
 							) {
 								try {
-									await transport.deliverMessage?.(agent, message);
+									await transport.deliverMessage?.(agent, {
+										...message,
+										content: modules.context.redactPrivateText(message.content),
+									});
 								} catch {
 									// The durable parent mailbox remains the retry path for the next turn.
 								}

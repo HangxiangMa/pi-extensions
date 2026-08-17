@@ -438,7 +438,7 @@ export class AgentRegistry {
 		) {
 			throw new Error(`Agent ${id} cannot accept follow-up while ${agent.state}`);
 		}
-		const unread = agent.mailbox.filter((message) => !message.readAt);
+		const unread = agent.mailbox.filter((message) => !message.readAt).slice(-20);
 		agent.currentMailboxMessageIds = unread.map((message) => message.id);
 		this.startTurn(agent, boundedTask, options);
 		return this.copy(agent);
@@ -565,7 +565,8 @@ export class AgentRegistry {
 		}
 		if (signal?.aborted) throw waitAbortError();
 		const agent = this.require(id);
-		const running = this.running.get(id);
+		const agentId = agent.id;
+		const running = this.running.get(agentId);
 		if (!running) return { timedOut: false, agent: this.copy(agent) };
 		let timer: NodeJS.Timeout | undefined;
 		let onAbort: (() => void) | undefined;
@@ -581,7 +582,7 @@ export class AgentRegistry {
 		if (onAbort) signal?.removeEventListener("abort", onAbort);
 		if (result === "aborted") throw waitAbortError();
 		return result === "timeout"
-			? { timedOut: true, agent: this.copy(this.require(id)) }
+			? { timedOut: true, agent: this.copy(this.require(agentId)) }
 			: { timedOut: false, agent: this.copy(result) };
 	}
 
@@ -598,6 +599,7 @@ export class AgentRegistry {
 
 	async interrupt(id: string): Promise<ManagedAgent> {
 		const agent = this.require(id);
+		const agentId = agent.id;
 		if (agent.state !== "running" && agent.state !== "starting")
 			throw new Error(`Agent ${id} is not running`);
 		if (agent.capabilityGrant?.state === "active") {
@@ -611,7 +613,7 @@ export class AgentRegistry {
 			agent.executionPlan = rotateExecutionPlanGeneration(agent.executionPlan);
 		}
 		if (agent.state === "starting") {
-			const index = this.queue.findIndex((entry) => entry.agent.id === id);
+			const index = this.queue.findIndex((entry) => entry.agent.id === agentId);
 			if (index >= 0) {
 				const [entry] = this.queue.splice(index, 1);
 				const recipient = this.completionRecipient(agent);
@@ -639,14 +641,14 @@ export class AgentRegistry {
 					agent: this.copy(agent),
 				};
 				entry.resolve(agent);
-				this.running.delete(id);
+				this.running.delete(agentId);
 				if (persisted) await this.notifyTurnComplete(completion);
 				return this.copy(agent);
 			}
 		}
-		this.controllers.get(id)?.abort();
-		await this.running.get(id);
-		return this.copy(this.require(id));
+		this.controllers.get(agentId)?.abort();
+		await this.running.get(agentId);
+		return this.copy(this.require(agentId));
 	}
 
 	async closeTree(id: string): Promise<ManagedAgent[]> {
@@ -671,6 +673,7 @@ export class AgentRegistry {
 
 	async close(id: string): Promise<ManagedAgent> {
 		const agent = this.require(id);
+		const agentId = agent.id;
 		if (agent.state === "closed") throw new Error(`Agent ${id} is already closed`);
 		if (agent.children.some((childId) => this.agents.get(childId)?.state !== "closed")) {
 			throw new Error(`Agent ${id} has active descendants; close the subtree instead`);
@@ -684,20 +687,20 @@ export class AgentRegistry {
 			}
 		}
 		if (agent.state === "starting") {
-			const index = this.queue.findIndex((entry) => entry.agent.id === id);
+			const index = this.queue.findIndex((entry) => entry.agent.id === agentId);
 			if (index >= 0) {
 				const [entry] = this.queue.splice(index, 1);
 				entry.resolve(agent);
-				this.running.delete(id);
+				this.running.delete(agentId);
 			}
 		}
-		this.controllers.get(id)?.abort();
-		await this.running.get(id)?.catch(() => undefined);
+		this.controllers.get(agentId)?.abort();
+		await this.running.get(agentId)?.catch(() => undefined);
 		agent.state = "closed";
 		agent.updatedAt = this.now();
 		if (agent.parentId) {
 			const parent = this.agents.get(agent.parentId);
-			if (parent) parent.children = parent.children.filter((childId) => childId !== id);
+			if (parent) parent.children = parent.children.filter((childId) => childId !== agentId);
 		}
 		clearCurrentTurn(agent);
 		let releaseError: unknown;

@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import net, { type AddressInfo, type Server, type Socket } from "node:net";
+import { redactPrivateText } from "./context.js";
 import { truncateUtf8 } from "./limits.js";
 import type { AgentMailboxMessage, AgentRegistry, ManagedAgent } from "./registry.js";
 import { ROOT_TASK_PATH } from "./task-path.js";
@@ -76,7 +77,7 @@ export class PeerCommunicationBroker {
 		if (recipient?.state === "running" && !this.dispatchedIds.has(message.id)) {
 			this.dispatchedIds.add(message.id);
 			try {
-				await this.options.dispatch?.(recipient, message);
+				await this.options.dispatch?.(recipient, redactedDeliveryCopy(message));
 			} catch {
 				// Durable mailbox delivery remains available for the recipient's next turn.
 			}
@@ -199,7 +200,10 @@ export class PeerCommunicationBroker {
 			createdAt: (this.options.now ?? Date.now)(),
 			deduplicationKey,
 		};
-		await this.options.sendRoot({ message, senderPath: sender.taskPath ?? sender.id });
+		await this.options.sendRoot({
+			message: redactedDeliveryCopy(message),
+			senderPath: sender.taskPath ?? sender.id,
+		});
 		if (deduplicationId) {
 			this.rootDeduplication.set(deduplicationId, message);
 			while (this.rootDeduplication.size > 100) {
@@ -321,6 +325,10 @@ export class PeerCommunicationBroker {
 		const content = `${JSON.stringify(value)}\n`;
 		socket.end(content);
 	}
+}
+
+function redactedDeliveryCopy(message: AgentMailboxMessage): AgentMailboxMessage {
+	return { ...message, content: redactPrivateText(message.content) };
 }
 
 function stringArray(value: unknown): string[] {

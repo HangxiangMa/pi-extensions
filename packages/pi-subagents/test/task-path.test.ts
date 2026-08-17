@@ -91,6 +91,68 @@ test("registry assigns canonical paths, resolves IDs and paths, and releases clo
 	await registry.shutdown();
 });
 
+test("canonical lifecycle references use opaque IDs for runtime bookkeeping", async () => {
+	let activeSignal: AbortSignal | undefined;
+	let markStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		markStarted = resolve;
+	});
+	const registry = new AgentRegistry(
+		async (_agent, task, signal) => {
+			if (task === "active") {
+				activeSignal = signal;
+				markStarted();
+				await new Promise<void>((resolve) =>
+					signal.addEventListener("abort", () => resolve(), { once: true }),
+				);
+			}
+			return { output: task, exitCode: signal.aborted ? 130 : 0, aborted: signal.aborted };
+		},
+		{ maxActiveTurns: 1 },
+	);
+	try {
+		const active = await registry.spawn({
+			agent: "worker",
+			taskName: "active",
+			task: "active",
+			cwd,
+		});
+		await started;
+		const queued = await registry.spawn({
+			agent: "worker",
+			taskName: "queued",
+			task: "queued",
+			cwd,
+		});
+		assert.equal((await registry.wait(active.taskPath as string, 5)).timedOut, true);
+		assert.equal((await registry.interrupt(queued.taskPath as string)).state, "interrupted");
+		assert.equal((await registry.close(active.taskPath as string)).state, "closed");
+		assert.equal(activeSignal?.aborted, true);
+	} finally {
+		await registry.shutdown();
+	}
+
+	const hierarchy = immediateRegistry();
+	const parent = await hierarchy.spawn({
+		agent: "worker",
+		taskName: "parent",
+		task: "parent",
+		cwd,
+	});
+	await hierarchy.wait(parent.id, 100);
+	const child = await hierarchy.spawn({
+		agent: "worker",
+		taskName: "child",
+		task: "child",
+		cwd,
+		parentId: parent.id,
+	});
+	await hierarchy.wait(child.id, 100);
+	await hierarchy.close(child.taskPath as string);
+	assert.deepEqual(hierarchy.get(parent.id)?.children, []);
+	await hierarchy.shutdown();
+});
+
 test("concurrent spawns reserve one canonical path atomically", async () => {
 	const registry = immediateRegistry();
 	const attempts = await Promise.allSettled([

@@ -1,10 +1,13 @@
 import { defineTool, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { redactPrivateText } from "./context.js";
 import { MAX_TOOL_MESSAGE_BYTES, truncateUtf8 } from "./limits.js";
 import type { AgentMailboxMessage } from "./registry.js";
 
 const MAX_PEER_MESSAGE_BYTES = 16 * 1024;
 const MAX_DEDUPLICATION_KEY_LENGTH = 256;
+const PEER_ENVELOPE_HEADER =
+	/^Message Type: SUBAGENT_(?:COMPLETION|PEER_MESSAGE)\nProtocol: pi-subagents:v1\nMessage ID: (msg_[^\s]+)\n(?:Completion ID: (completion:[^\s]+)\n)?Sender ID: [^\n]+\n(?:Sender Path: [^\n]+\n)?Payload:\n/u;
 
 export interface ChildPeerClient {
 	send(target: string, message: string, deduplicationKey?: string): Promise<AgentMailboxMessage>;
@@ -91,7 +94,7 @@ export function formatPeerMessage(message: AgentMailboxMessage, senderPath?: str
 			`Sender ID: ${message.senderId}`,
 			...(senderPath ? [`Sender Path: ${senderPath}`] : []),
 			"Payload:",
-			message.content,
+			redactPrivateText(message.content),
 		].join("\n"),
 		MAX_TOOL_MESSAGE_BYTES,
 	).text;
@@ -105,10 +108,10 @@ export function visibleDeliveryIds(messages: readonly unknown[]): {
 	const completionIds = new Set<string>();
 	for (const message of messages) {
 		for (const text of messageText(message)) {
-			for (const match of text.matchAll(/^Message ID: (msg_[^\s]+)$/gmu)) messageIds.add(match[1]);
-			for (const match of text.matchAll(/^Completion ID: (completion:[^\s]+)$/gmu)) {
-				completionIds.add(match[1]);
-			}
+			const match = PEER_ENVELOPE_HEADER.exec(text);
+			if (!match) continue;
+			messageIds.add(match[1]);
+			if (match[2]) completionIds.add(match[2]);
 		}
 	}
 	return { messageIds, completionIds };
@@ -116,7 +119,9 @@ export function visibleDeliveryIds(messages: readonly unknown[]): {
 
 function messageText(message: unknown): string[] {
 	if (!message || typeof message !== "object" || Array.isArray(message)) return [];
-	const content = (message as Record<string, unknown>).content;
+	const candidate = message as Record<string, unknown>;
+	if (candidate.role !== "user") return [];
+	const content = candidate.content;
 	if (typeof content === "string") return [content];
 	if (!Array.isArray(content)) return [];
 	return content.flatMap((part) => {

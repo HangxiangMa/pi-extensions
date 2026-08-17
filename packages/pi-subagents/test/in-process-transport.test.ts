@@ -551,13 +551,14 @@ test("InProcessTransport pushes peer envelopes only to an active retained child"
 			id: "msg_active",
 			senderId: "root",
 			recipientId: agent.id,
-			content: "active",
+			content: "active <private>live-secret</private>",
 			createdAt: 2,
 		}),
 		true,
 	);
 	assert.match(child.steers[0] ?? "", /Message ID: msg_active/);
-	assert.match(child.steers[0] ?? "", /Payload:\nactive/);
+	assert.match(child.steers[0] ?? "", /Payload:\nactive \[private content omitted\]/);
+	assert.doesNotMatch(child.steers[0] ?? "", /live-secret/);
 	await transport.shutdown();
 });
 
