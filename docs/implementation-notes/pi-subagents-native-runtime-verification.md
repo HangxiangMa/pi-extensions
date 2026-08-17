@@ -2,7 +2,10 @@
 
 Date: 2026-07-11
 
-> Historical verification record. On 2026-07-23, the detached `subagent_wait` tool was removed and completion delivery gained opt-in batched `auto-resume`; the original wait/`triggerTurn: false` assertions below describe the earlier runtime.
+> Historical verification record.
+> On 2026-07-23, the detached `subagent_wait` tool was removed and completion delivery gained opt-in batched `auto-resume`.
+> On 2026-08-16, `scout` was renamed to `explorer`, and the built-in catalog was later reduced to `explorer` and `worker`.
+> The original wait, `triggerTurn: false`, and `scout` smoke details below describe the earlier runtime.
 
 ## Automated evidence
 
@@ -20,6 +23,7 @@ Date: 2026-07-11
 ## Local Pi runtime evidence
 
 Both smokes used a temporary `PI_CODING_AGENT_DIR`, copied only runtime auth/model/settings files needed by Pi, installed a temporary read-only `scout` override using `github-copilot/gpt-4.1`, set `persistence: false`, and removed the directory through a shell trap.
+The current equivalent would use `explorer`.
 
 - Default `stateful.transport: "subprocess"`: background spawn overlapped a main-agent README read, then wait completed and Pi returned `SUBPROCESS_STATEFUL_OK`.
 - Opt-in `stateful.transport: "in-process"`: background spawn overlapped a main-agent read, then the same `agentId` completed wait → follow-up → wait → close and Pi returned `IN_PROCESS_STATEFUL_OK`.

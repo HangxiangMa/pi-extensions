@@ -94,6 +94,8 @@ Its first new RPC turn seeds bounded sanitized parent context and logical histor
 
 Read-only built-in tool sets select `in-process` for the lowest startup overhead.
 
+The current built-in `explorer` default uses only `read`, `grep`, `find`, and `ls`, so it remains eligible for this route.
+
 Write-capable built-in tool sets select `rpc` for a persistent separate process.
 
 Extension or custom tools select the existing fresh `subprocess` path.
@@ -104,21 +106,15 @@ A restored inert record is preflighted again on its first explicit follow-up.
 
 No startup or post-acceptance failure triggers automatic fallback.
 
-## Execution profiles
+## Execution defaults
 
-Fast, Balanced, and Deep are explicit atomic patches to built-in agent thinking defaults.
+Fast, Balanced, and Deep execution profiles were removed.
 
-They do not change models, tools, timeouts, transport, completion delivery, or parent context.
+The built-in `explorer` defaults to `low` thinking for bounded read-only exploration.
 
-Fast uses low for scout, planner, worker aliases, and medium for reviewer.
+The built-in `worker` inherits model and thinking unless a caller, frontmatter, or per-agent setting selects a value.
 
-Balanced uses low for scout and medium for planner, reviewer, and worker aliases.
-
-Deep uses medium for scout and high for planner, reviewer, and worker aliases.
-
-No profile selects `max`.
-
-Explicit tool-call values remain authoritative.
+Execution defaults do not change tools, transport, completion delivery, parent context, or explicit tool-call limits.
 
 ## Measurement
 

@@ -1,5 +1,10 @@
 # pi-subagents proactivity research
 
+> Historical research note.
+> This snapshot predates the current minimal built-in catalog and the removal of `subagent_auto`.
+> Current built-ins are `explorer` and `worker` only.
+> The current direction is main-agent-led delegation with async-first guidance, not extension-owned planning.
+
 Accessed date for external sources: 2026-05-17.
 
 ## Problem
@@ -14,7 +19,7 @@ without turning every task into expensive, noisy delegation.
 
 Evidence was gathered from:
 
-- Current package code: `packages/pi-subagents/src/subagents.ts`,
+- Historical package code at the time of the research: `packages/pi-subagents/src/subagents.ts`,
   `packages/pi-subagents/src/agents.ts`, and `packages/pi-subagents/README.md`.
 - Pi extension API docs:
   `/home/narumi/.bun/install/global/node_modules/@earendil-works/pi-coding-agent/docs/extensions.md`.
@@ -23,9 +28,10 @@ Evidence was gathered from:
 
 ## Evidence summary
 
-- Current state is **L0 passive delegation**: `subagent` is registered as a custom
-tool, but lacks `promptSnippet`, `promptGuidelines`, and any
+- Historical state was **L0 passive delegation**: `subagent` was registered as a custom
+tool, but lacked `promptSnippet`, `promptGuidelines`, and any
 `before_agent_start` orchestration reminder.
+- Current state has L1 prompt metadata for blocking and detached tools, while extension-owned objective-to-DAG planning remains removed.
 - The lowest-risk improvement is **L1 prompt metadata** on the tool definition.
 - A bounded **L2 dynamic orchestration hint** can be tested behind a feature flag
 if L1 does not increase correct proactive calls enough.
@@ -42,14 +48,13 @@ UX risks.
 | Parallel limits | `packages/pi-subagents/src/subagents.ts:31-32` sets `MAX_PARALLEL_TASKS = 8` and `MAX_CONCURRENCY = 4`; `:729-735` rejects over-large parallel batches; `:778` uses `mapWithConcurrencyLimit`. | There is already a guardrail for over-delegation; prompt guidance can safely mention parallel fan-out within these limits. |
 | Status UI | `packages/pi-subagents/src/subagents.ts:49-79` publishes status through `ctx.ui.setStatus`; chain/parallel/single calls update it at `:670`, `:740`, and `:866`. | Users can see active subagent work, but status is reactive, not a trigger for delegation. |
 | Agent scope and trust | `packages/pi-subagents/src/subagents.ts:603-606` defaults to `agentScope: "user"`; `:641-663` asks before using project-local agents when UI is available. | Proactive guidance must not suggest project-local agents unless `agentScope` is explicitly enabled and confirmation is respected. |
-| Built-in agents | `packages/pi-subagents/src/agents.ts:23-69` defines `scout`, `planner`, `reviewer`, `worker`, `general`, and `general-purpose`. | There are enough built-ins for a decomposition rubric: read-only research, planning, independent review, and implementation. |
+| Built-in agents | Historical snapshot: `scout`, `planner`, `reviewer`, `worker`, `general`, and `general-purpose`; current catalog: `explorer` and `worker`. | Current guidance should use `explorer` for read-only evidence gathering, `worker` for execution, and custom agents or main-agent skills for review and planning. |
 | Agent discovery | `packages/pi-subagents/src/agents.ts:155-189` discovers nearest `.pi/agents`, merges built-ins, user agents, and project agents by requested scope. | A dynamic roster is possible, but injecting it every turn risks prompt growth/cache churn. |
 | Documentation | `packages/pi-subagents/README.md` documents delegation modes, built-ins, project-agent confirmation, runtime limits, and status. | User docs cover explicit usage, but not a proactive rubric for the main agent. |
 
 Verification grep target: `registerTool`, `promptSnippet`, `promptGuidelines`, and
-`before_agent_start` are intentionally named here because the current package has
-`registerTool` but no `promptSnippet` / `promptGuidelines` / `before_agent_start`
-usage in `packages/pi-subagents/src`.
+`before_agent_start` are intentionally named here for the historical snapshot.
+Current verification should inspect blocking and detached tool prompt metadata directly.
 
 ## Pi extension intervention points
 
@@ -59,7 +64,7 @@ All `docs/extensions.md` line references in this table refer to
 | Pi extension mechanism | Source reference | Possible proactivity mechanism | Fit |
 | --- | --- | --- | --- |
 | `promptSnippet` | `docs/extensions.md:1217-1240`, `:1664-1668` says custom tools can add a one-line `Available tools` entry. | Add a short `subagent` summary such as: "Delegate independent research, review, or multi-step work to isolated workers." | Best L1 default. Low risk, static, low token cost. |
-| `promptGuidelines` | `docs/extensions.md:1225-1227`, `:1666-1668` says guideline bullets are appended flat and must name the tool. | Add explicit rules: when to use `subagent`, when not to use it, prefer read-only parallel scouts, use `reviewer` after implementation. | Best L1 default. Must keep bullets concise and tool-named. |
+| `promptGuidelines` | `docs/extensions.md:1225-1227`, `:1666-1668` says guideline bullets are appended flat and must name the tool. | Add explicit rules: when to use `subagent`, when not to use it, prefer bounded read-only exploration, and use main-agent review skills or custom verifier agents after implementation. | Best L1 default. Must keep bullets concise and tool-named. |
 | `before_agent_start` | `docs/extensions.md:466-501` can inject a message or modify the system prompt and exposes `systemPromptOptions`. | L2 feature flag can add a dynamic roster and a per-turn decomposition reminder only for complex prompts. | Useful spike. Risk: prompt churn and false positives. |
 | `input` event | `docs/extensions.md:806-850` can inspect raw input before skill/template expansion. | Detect explicit phrases like "parallel agents" or "subagents" and add/transform hints. | Limited. Raw input pre-expansion makes it brittle. Avoid for MVP. |
 | `sendMessage` | `docs/extensions.md:1268-1289` injects custom messages and can trigger turns. | Could implement background scheduler/status nudges. | L4 only. High loop/UX risk. |
@@ -109,7 +114,7 @@ All `docs/extensions.md` line references in this table refer to
 - Implementation is followed by independent review or verification.
 - The work can be described with self-contained context, expected output, and done criteria.
 - Parallel tasks touch different modules or are read-only.
-- A built-in read-only agent (`scout`, `planner`, `reviewer`) is enough, or custom user agents are explicitly available.
+- The built-in `explorer` is enough for read-only repository evidence gathering, or custom user agents are explicitly available.
 
 ### Do **not** use `subagent` when
 
@@ -125,14 +130,14 @@ All `docs/extensions.md` line references in this table refer to
 
 | Prompt | Classification | Suggested action | Rationale |
 | --- | --- | --- | --- |
-| "Audit this branch for release blockers before I merge." | Use subagent | Parallel `scout`/`reviewer`, optional fan-in `reviewer`. | Independent read-only checks and adversarial review are useful. |
-| "Research auth, database, and API modules in parallel and summarize risks." | Use subagent | Parallel `scout` tasks with an aggregator. | Distinct domains and parallelizable research. |
-| "After you finish the implementation, get a second opinion." | Use subagent | Run `reviewer` after edits/tests. | Fresh verification avoids implementation bias. |
-| "Find all files related to statusline rendering." | Use subagent if broad | `scout` when search space is large; main agent if known path. | Verbose search can be isolated, but small targeted lookups should stay main. |
+| "Audit this branch for release blockers before I merge." | Conditional | Prefer main-agent review skill; use custom verifier agents or panel mode only when independent child review is explicitly useful. | Independent checks can help, but no built-in reviewer exists now. |
+| "Research auth, database, and API modules in parallel and summarize risks." | Use subagent | Parallel `explorer` tasks, or one detached `explorer` covering related branches. | Distinct domains and parallelizable read-only research can be isolated. |
+| "After you finish the implementation, get a second opinion." | Conditional | Use main-agent review skill, deterministic checks, or a custom verifier agent. | Fresh verification avoids implementation bias without requiring a built-in reviewer. |
+| "Find all files related to statusline rendering." | Use subagent if broad | `explorer` when search space is large; main agent if known path. | Verbose search can be isolated, but small targeted lookups should stay main. |
 | "Rename this variable in `src/foo.ts`." | Do not use | Main agent edits directly. | Simple, targeted, shared context; subagent adds overhead. |
 | "Explain what this README paragraph means." | Do not use | Answer directly. | Conversational explanation, no tool-heavy work. |
 | "Use project agents to review the security model." | Conditional | Use `agentScope: "both"` only after confirmation. | Project agents are repo-controlled and require trust boundary handling. |
-| "Run the full test suite and summarize only failures." | Use subagent | `reviewer` or `worker` with no edits. | High-volume output is isolated from main context. |
+| "Run the full test suite and summarize only failures." | Use subagent | `worker` or a custom no-edit verifier agent. | High-volume output is isolated from main context. |
 | "Implement frontend and backend changes that touch the same schema file." | Split carefully | Research can fan out; implementation serialized in main or one worker. | Write conflicts make parallel implementation unsafe. |
 | "Keep working automatically until everything is perfect." | Do not use L4 | Ask for bounded objective or use explicit plan. | Open-ended auto-scheduling risks loops and uncontrolled cost. |
 
@@ -163,21 +168,19 @@ Eval matrix:
 
 | # | Prompt | Expected | Baseline L0 record | Candidate L1 record | Candidate L2 record | Pass criterion |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | "Audit this branch for release blockers before I merge." | Should use `subagent` `reviewer`/`scout`. | Record whether current main agent delegates. | Record delegation, summary quality. | Record delegation, false-positive notes. | Uses subagent and returns grounded blocker list. |
+| 1 | "Audit this branch for release blockers before I merge." | Should use main-agent review skill or custom verifier agents when delegation is justified. | Record whether current main agent delegates. | Record delegation, summary quality. | Record delegation, false-positive notes. | Returns a grounded blocker list without assuming a built-in reviewer. |
 | 2 | "Research auth, database, and API modules in parallel." | Should use parallel `subagent`. | Record number of agents. | Record if parallel mode chosen. | Record if parallel mode chosen. | Uses one parallel call, not serial calls. |
-| 3 | "Implement the change, then independently verify it." | Should use main/worker for implementation and `reviewer` after. | Record whether review is skipped. | Record reviewer use. | Record reviewer use. | Independent verification occurs after edits. |
+| 3 | "Implement the change, then independently verify it." | Should use main/worker for implementation and main-agent review skill, deterministic checks, or a custom verifier afterward. | Record whether review is skipped. | Record verifier use. | Record verifier use. | Independent verification occurs after edits. |
 | 4 | "Explain this README sentence in plain language." | Should **not** use `subagent`. | Record direct response. | Record direct response. | Record direct response. | No subagent call. |
 | 5 | "Rename `foo` to `bar` in one file." | Should **not** use `subagent`. | Record direct edit. | Record direct edit. | Record direct edit. | No subagent call. |
 | 6 | "Use project agents to review this repo." | Conditional: ask/confirm or use only when `agentScope` requested. | Record behavior. | Record behavior. | Record behavior. | Does not bypass project-agent confirmation. |
 
-## Recommendation
+## Historical recommendation
 
-Yes, it is worth making `pi-subagents` more proactive, but only at L1 by
-default. The current tool already supports the right execution primitives; the
-missing piece is clear model-facing guidance on when to decompose, when to
-parallelize, and when not to delegate.
+The L1 recommendation below has been implemented as prompt metadata and documentation.
+Future guidance work should update the current `explorer`/`worker` catalog and async-first direction rather than revive removed built-ins or `subagent_auto`.
 
-Recommended route:
+Recommended route from the historical snapshot:
 
 1. Implement L1 in the next PR: add `promptSnippet` and concise
    `promptGuidelines` to `packages/pi-subagents/src/subagents.ts`.
