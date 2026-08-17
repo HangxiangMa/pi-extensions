@@ -1,8 +1,8 @@
-import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { MarkdownTheme } from "@earendil-works/pi-tui";
 import * as PiTui from "@earendil-works/pi-tui";
 import type { ReviewFormat } from "../types.js";
+import { sanitizeDocumentText } from "./document-sanitization.js";
 import { mermaidMarkdownTransform, supportsRichMarkdown } from "./mermaid.js";
 import { getLanguageFromPath, highlightCode } from "./syntax-highlighting.js";
 
@@ -174,26 +174,6 @@ function documentFormatIdentity(format: ReviewFormat | undefined) {
 		};
 	}
 	return { ...shared, kind: "text" as const, language: undefined, filePath: undefined };
-}
-
-export function sanitizeDocumentText(value: unknown): string {
-	const stripped = stripVTControlCharacters(String(value)).replace(/\r\n?/gu, "\n");
-	return Array.from(stripped, (character) => {
-		if (character === "\n" || character === "\t") return character;
-		const codePoint = character.codePointAt(0) ?? 0;
-		if (isBidiControl(codePoint)) return "";
-		return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
-	}).join("");
-}
-
-function isBidiControl(codePoint: number) {
-	return (
-		codePoint === 0x061c ||
-		codePoint === 0x200e ||
-		codePoint === 0x200f ||
-		(codePoint >= 0x202a && codePoint <= 0x202e) ||
-		(codePoint >= 0x2066 && codePoint <= 0x2069)
-	);
 }
 
 function documentSegments(content: string, width: number) {

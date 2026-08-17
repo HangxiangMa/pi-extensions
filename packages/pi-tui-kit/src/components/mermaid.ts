@@ -4,6 +4,7 @@ import * as PiTui from "@earendil-works/pi-tui";
 import type { MermaidArt, Span } from "grok-mermaid";
 import { sanitizeTerminalText } from "../terminal-text.js";
 import type { MenuScreen, ReviewFormat } from "../types.js";
+import { sanitizeDocumentText } from "./document-sanitization.js";
 
 type MermaidRender = typeof import("grok-mermaid")["render"];
 type MermaidTheme = Pick<Theme, "fg" | "bold">;
@@ -57,12 +58,19 @@ export function mermaidMarkdownTransform(theme: MermaidTheme) {
 }
 
 function documentNeedsMermaid(content: string | undefined, format: ReviewFormat | undefined) {
-	return (
-		format?.kind === "markdown" &&
-		format.renderMermaid !== false &&
-		content !== undefined &&
-		/(?:^|\n)[\t ]{0,3}(?:`{3,}|~{3,})[\t ]*mermaid(?:[\t \r\n]|$)/iu.test(content)
-	);
+	if (
+		format?.kind !== "markdown" ||
+		format.renderMermaid === false ||
+		content === undefined ||
+		!supportsRichMarkdown()
+	) {
+		return false;
+	}
+	const markdown = sanitizeDocumentText(content);
+	if (!/(?:^|\n)[\t ]{0,3}(?:`{3,}|~{3,})[\t ]*mermaid(?:[\t \n]|$)/iu.test(markdown)) {
+		return false;
+	}
+	return new PiTui.Marked().lexer(markdown).some(isMermaid);
 }
 
 function renderToken(token: Token, availableWidth: number, theme: MermaidTheme) {

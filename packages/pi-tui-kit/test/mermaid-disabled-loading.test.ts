@@ -11,7 +11,7 @@ vi.mock("grok-mermaid", () => {
 	return { render: () => null };
 });
 
-test("ordinary Markdown and disabled Mermaid fences do not load the renderer", async () => {
+test("only top-level enabled Mermaid fences load the renderer", async () => {
 	for (const screen of [
 		{
 			kind: "review" as const,
@@ -24,6 +24,18 @@ test("ordinary Markdown and disabled Mermaid fences do not load the renderer", a
 			title: "Disabled Mermaid",
 			content: "```mermaid\nflowchart LR\n A --> B\n```",
 			format: { kind: "markdown" as const, renderMermaid: false },
+		},
+		{
+			kind: "review" as const,
+			title: "Nested literal fence",
+			content: "````markdown\n```mermaid\nflowchart LR\n A --> B\n```\n````",
+			format: { kind: "markdown" as const },
+		},
+		{
+			kind: "review" as const,
+			title: "Tab-indented code",
+			content: "\t```mermaid\n\tflowchart LR\n\t A --> B\n\t```",
+			format: { kind: "markdown" as const },
 		},
 	]) {
 		const tui = createTuiHarness({ width: 80, rows: 24 });

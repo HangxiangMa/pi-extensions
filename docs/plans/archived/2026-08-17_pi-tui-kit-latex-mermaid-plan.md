@@ -71,6 +71,10 @@ Advance `PI_EXTENSION_MENU_API_VERSION` for the additive public contract and rec
 - [x] Audit the final diff against `AGENTS.md`, `packages/pi-tui-kit/AGENTS.md`, and the touched TUI, package, documentation, and verification sections of `docs/extension-conventions.md`; review found no blocking correctness, security, lifecycle, compatibility, or scope issue. Hardening added shared bidi-control removal, alternate/case-insensitive fences, wide Unicode labels, disabled-load proof, third-party load/render failure fallbacks, and stale concurrent-load coverage. Existing formats/modes remain tested, coding-agent imports stay type-only, only public Pi APIs are used, and no consumer changed. A manual interactive TUI smoke remains unrun under the non-interactive execution policy; real-component harnesses, the benchmark, packaging smoke, and old-host smoke cover the runtime path.
 - [x] Mark this objective `DONE` and archive the plan only after every completion item has evidence; all required evidence is recorded, and the plan was moved to `docs/plans/archived/2026-08-17_pi-tui-kit-latex-mermaid-plan.md`.
 
+## Review Follow-up
+
+- [x] Align Mermaid preparation with the sanitized top-level Markdown tokens so CR-only line endings render while nested literal fences and tab-indented code do not load Grok; the two focused regressions initially failed on both mismatches, then 22 Kit files/198 tests, the Kit check, the 353-file/3,476-test root gate, the lazy-load benchmark, and a 65-file package inspection passed.
+
 ## Risks
 
 - Pi's Markdown renderer is semantic and may reflow or normalize source, so only the new explicit format may use it while exact formats retain their current hard-wrapping path.
