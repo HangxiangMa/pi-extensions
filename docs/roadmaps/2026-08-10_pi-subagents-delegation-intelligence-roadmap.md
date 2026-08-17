@@ -84,8 +84,8 @@ No publication, release, tag, visibility change, default routing change, or rele
 
 ## Historical records
 
-The superseded full-automation roadmap is archived at [`archived/2026-08-10_pi-subagents-full-automation-roadmap.md`](archived/2026-08-10_pi-subagents-full-automation-roadmap.md).
+Superseded full-automation and `subagent_auto` design notes were removed from the active docs tree.
 
-The removed `subagent_auto` design is archived at [`../implementation-notes/archived/pi-subagents-autonomous-workflow-planning.md`](../implementation-notes/archived/pi-subagents-autonomous-workflow-planning.md).
+Git history remains the historical record.
 
 Research inputs remain under [`../research/`](../research/).

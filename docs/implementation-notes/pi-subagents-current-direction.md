@@ -66,10 +66,6 @@ Future async-only behavior needs a separate approved migration decision.
 
 ## Historical evidence
 
-Historical notes are retained for evidence only and are not active product direction.
+Superseded automation, proactivity, and old runtime notes were removed to keep the active docs small.
 
-- [`archived/pi-subagents-autonomous-workflow-planning.md`](archived/pi-subagents-autonomous-workflow-planning.md) describes the removed `subagent_auto` design.
-- [`archived/pi-subagents-proactivity-research.md`](archived/pi-subagents-proactivity-research.md) predates the current minimal built-in catalog.
-- [`archived/pi-subagents-l1-proactivity-eval.md`](archived/pi-subagents-l1-proactivity-eval.md) preserves historical evaluated expectations.
-- [`archived/pi-subagents-native-runtime-verification.md`](archived/pi-subagents-native-runtime-verification.md) preserves old runtime smoke evidence.
-- [`../roadmaps/archived/2026-08-10_pi-subagents-full-automation-roadmap.md`](../roadmaps/archived/2026-08-10_pi-subagents-full-automation-roadmap.md) is historical only.
+Git history remains the historical record.
