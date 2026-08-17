@@ -70,7 +70,6 @@ The capability matrix remains the detailed boundary record: [`pi-subagents-capab
 
 | Follow-up | Owner |
 | --- | --- |
-| Rolling runtime for caller-authored workflows | [`2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) |
 | Matched evidence before adaptive/default routing | [`2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) |
 
 ## Deferred or rejected ideas
@@ -80,6 +79,7 @@ The capability matrix remains the detailed boundary record: [`pi-subagents-capab
 | Built-in planner or reviewer roles | Removed; use main-agent skills or custom agents. |
 | `subagent_auto` objective-to-DAG planning | Removed; use caller-authored `subagent.workflow`. |
 | Extension-owned automatic topology selection | Deferred until matched evidence and explicit approval. |
+| Rolling runtime for blocking caller-authored workflows | Removed from the active roadmap because it does not improve the recommended async main-agent path, and current evidence does not justify its concurrency, recovery, and resume complexity. Reconsider only after representative demand and makespan evidence. |
 | Recursive workflow grandchildren | Rejected until separately evaluated and approved. |
 | More than two concurrent mutating children | Rejected until separately evaluated and approved. |
 | Treating tool policy as OS sandboxing | Rejected; docs must keep the boundary explicit. |

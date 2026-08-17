@@ -11,9 +11,7 @@ The [verified execution loop plan](archived/2026-08-10_pi-subagents-verified-exe
 
 The archived autonomous workflow planning plan is historical only because `subagent_auto` and the built-in `planner` are removed.
 
-The [event-driven workflow runtime plan](2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) owns rolling scheduling, recovery, and resume for caller-authored workflows.
-
-Those plans may provide evaluated implementations and fixtures, but they do not satisfy this plan's paired live-provider gate by themselves.
+Existing explicit workflow implementations and fixtures may contribute evidence, but they do not satisfy this plan's paired live-provider gate by themselves.
 
 ## Post-hoc Origin
 
