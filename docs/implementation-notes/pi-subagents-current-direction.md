@@ -85,6 +85,10 @@ New implementation work should respond to demonstrated user needs rather than ex
 
 ## Historical evidence
 
+The consolidated [research synthesis](../research/coding-agent-subagents-research.md) records the architecture conclusions available at the research cutoff.
+
+The companion [evidence catalog](../research/coding-agent-subagents-evidence-catalog.md) preserves paper-level results, caveats, and primary sources.
+
 Superseded automation, proactivity, and old runtime notes were removed to keep the active docs small.
 
-Git history remains the historical record.
+Git history remains the record of earlier research drafts and raw search transcripts.

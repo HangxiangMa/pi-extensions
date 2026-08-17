@@ -4,7 +4,7 @@
 
 This document records Codex mechanisms relevant to quiet external waiting and race-safe automatic continuation.
 
-It supports the archived [`docs/plans/archived/2026-08-10_pi-goal-codex-wait-hardening-plan.md`](../plans/archived/2026-08-10_pi-goal-codex-wait-hardening-plan.md), and it is not a claim that Codex has an exact equivalent of `pi-goal`'s `goal_wait`.
+It supported the archived `pi-goal` wait-hardening work recorded in Git history, and it is not a claim that Codex has an exact equivalent of `pi-goal`'s `goal_wait`.
 
 A separate future Pi Core proposal may cite the core-owned admission findings, but that proposal is not part of the `pi-goal` hardening plan.
 
