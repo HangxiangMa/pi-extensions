@@ -82,7 +82,7 @@ Otherwise the workflow stops with an actionable non-success outcome.
 - Do not build a distributed queue, remote worker service, cron scheduler, or general workflow engine.
 - Do not add a learned scheduler, reward model, or provider-time classifier in the first implementation.
 - Do not expand dashboards, inspection, status, or telemetry beyond runtime metadata required for correctness and persisted reconciliation.
-- Do not change parallel result ordering or omitted-field behavior for existing non-automation modes.
+- Do not change parallel result ordering or omitted-field behavior for existing blocking and caller-authored workflow modes.
 - Do not publish, tag, release, or change a package default.
 
 ## Assumptions
@@ -114,7 +114,7 @@ Otherwise the workflow stops with an actionable non-success outcome.
 ## Rollback / Recovery
 
 - Keep current batch workflow execution as an explicit fallback until rolling execution passes deterministic and representative evidence.
-- Put rolling execution and resume behind the explicit automation contract, with versioned persisted runtime records.
+- Put rolling execution and resume behind an explicit caller-authored workflow runtime setting or separately approved surface, with versioned persisted runtime records.
 - Preserve declared result ordering even when launch and settlement order changes.
 - On corrupt, unsupported, semantically incompatible, or ambiguous persisted state, quarantine the record and return needs-revalidation or rejected without launching work.
 - Stop the workflow when recovery cannot prove safe continuation instead of falling back to blind replay.

@@ -5,9 +5,9 @@ README owns public schemas and usage; source and focused tests are the executabl
 
 | Capability | Status and boundary | Evidence |
 | --- | --- | --- |
-| Blocking single/parallel/chain/fan-in | Implemented through `subagent`; the full batch is preflighted before any launch | `src/execution.ts`, `test/subagents.test.ts` |
-| Detached addressable agents | Implemented through `subagent_spawn`; completion delivery is next-turn by default or opt-in auto-resume | `src/stateful.ts`, `test/orchestration.test.ts`, `test/completion-delivery.test.ts` |
-| Follow-up and retained lifecycle | Implemented through `subagent_send`, `subagent_manage`, and `subagent_mailbox` | `src/stateful.ts`, registry/orchestration tests |
+| Blocking single/parallel/chain/fan-in | Implemented through `subagent`; the full batch is preflighted before any launch | `src/execution.ts`, blocking execution and registration tests |
+| Detached addressable agents | Implemented through `subagent_spawn`; completion delivery is next-turn by default or opt-in auto-resume | `src/stateful.ts`, stateful registration, registry, and completion-delivery tests |
+| Follow-up and retained lifecycle | Implemented through `subagent_send`, `subagent_manage`, and `subagent_mailbox` | `src/stateful.ts`, registry and stateful lifecycle tests |
 | Metadata-only inspection | `subagent_inspect` is registered in every workflow, including disabled delegation; it never launches children or reads/acknowledges mailbox content | `src/inspect.ts`, `test/inspect.test.ts` |
 | Synchronous read-only consultation | `subagent_consult` is registered whenever blocking delegation is enabled; it runs one ephemeral child with extensions disabled and only the effective subset of `read`, `grep`, `find`, and `ls` | `src/consult.ts`, `src/consult-policy.ts`, `test/consult.test.ts` |
 | Default tool surface | Seven tools: `subagent`, `subagent_spawn`, `subagent_send`, `subagent_manage`, `subagent_mailbox`, `subagent_inspect`, and `subagent_consult` | `src/subagents.ts`, registration and rendering tests |

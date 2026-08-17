@@ -1,6 +1,7 @@
 # Pi Subagents Full Automation Roadmap
 
-- **Status:** Superseded by the decision to remove `subagent_auto` and the built-in `planner`; retained as historical context for verified execution and deferred automation ideas.
+- **Status:** Superseded by the decision to remove `subagent_auto` and the built-in `planner`; retained as historical context only.
+- **Active work:** None; unchecked items below are not active tasks unless a new approved plan reopens them.
 - **Audience:** `@narumitw/pi-subagents` maintainers and contributors.
 - **Planning horizon:** Evidence-qualified phases without delivery dates.
 - **Baseline:** [`Pi Subagents Delegation Intelligence Roadmap`](2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
@@ -14,7 +15,7 @@ Current direction: keep topology selection with the main agent or caller-authore
 
 Keep Pi as the owner of model sessions, provider behavior, and tool execution.
 
-Keep `pi-subagents` as the owner of delegation planning, workflow state, authority, integration admission, verification acceptance, recovery bounds, and terminal completion.
+Keep `pi-subagents` as the owner of workflow state, authority, integration admission, verification acceptance, recovery bounds, and terminal completion for caller-authored workflows.
 
 ## Objectives
 
@@ -54,8 +55,8 @@ The original implementation plans were removed after their durable decisions and
 - **Smallest justified topology:** use parent-owned or one-child execution unless decomposition, isolation, parallelism, specialization, or independent verification provides a concrete benefit.
 - **No blind side-effect replay:** accepted, ambiguous, stale, interrupted, or potentially mutating work is never replayed merely because settlement was not observed.
 - **Patch the graph, not history:** replanning changes only pending, rework-requested, or invalidated nodes and preserves accepted artifacts and provenance.
-- **Compatibility by omission:** existing single, parallel, chain, panel, detached, and explicit workflow calls retain their behavior unless the new automation contract is selected.
-- **Evidence before defaults:** full automation remains explicit and bounded until matched evaluation supports a separate default-change decision.
+- **Compatibility by omission:** existing single, parallel, chain, panel, detached, and caller-authored workflow calls retain their behavior unless a future explicit contract is separately approved.
+- **Evidence before defaults:** automation remains absent unless matched evaluation supports a separate approved default-change decision.
 
 ## Roadmap
 
@@ -92,22 +93,22 @@ The original implementation plans were removed after their durable decisions and
 
 **Execution plan:** [`2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md).
 
-### Phase 4: Qualify production use
+### Phase 4: Historical production-use gate
 
-- [ ] Repeated paired repository tasks compare full automation with a strong single agent, one child, equal-budget best-of-N, fixed two-child execution, and explicit workflow execution under matched information, model, tools, evaluator, aggregate budget, and wall-clock ceilings.
+- [ ] Repeated paired repository tasks compare any future automation proposal with a strong single agent, one child, equal-budget best-of-N, fixed two-child execution, and explicit workflow execution under matched information, model, tools, evaluator, aggregate budget, and wall-clock ceilings.
 - [ ] Results separately report verified success, false completion, unnecessary delegation, rework, conflicts, stale acceptance, duplicate side effects, tokens, cost, and critical-path duration by task class.
 - [ ] A recorded **Admit**, **Revise**, or **Defer** decision identifies eligible task classes and preserves explicit opt-in behavior when evidence is insufficient.
 - [ ] Any default change, recursion expansion, wider mutating team, publication, tag, or release remains a separate explicitly approved action.
 
-**Outcome:** Production behavior changes only when representative evidence shows where automation is safer or more effective than simpler alternatives.
+**Outcome:** Historical only; production behavior changes only through a new approved plan with representative evidence.
 
 ## Success Metrics
 
 | Indicator | Current baseline | Required invariant or decision |
 | --- | --- | --- |
-| Mutating workflow accepted from worker self-report alone | Rejected in explicit verified-execution mode | 0 in full-automation mode |
+| Mutating workflow accepted from worker self-report alone | Rejected in explicit verified-execution mode | 0 in any future automation mode |
 | Verifier-caused state drift accepted | Rejected by exact-tree before-and-after checks | 0 |
-| Executed but unaccepted work treated as terminal success | Rejected by versioned acceptance state in verified-execution mode | 0 in full-automation mode |
+| Executed but unaccepted work treated as terminal success | Rejected by versioned acceptance state in verified-execution mode | 0 in any future automation mode |
 | Accepted stale or old-generation verification receipts | Rejected end to end in verified-execution tests | 0 end to end |
 | Managed integration checks exercised by workflow execution | Wired for explicit verified execution | Every automated mutating acceptance |
 | Unrelated ready work blocked by a slow selected sibling | Possible under batch scheduling | 0 when safe capacity is available |
@@ -150,7 +151,7 @@ The original implementation plans were removed after their durable decisions and
 
 - **2026-08-10 — Prioritize verified completion over broader autonomy:** automatic planning must not precede an executor-owned independent acceptance boundary.
 - **2026-08-10 — Exclude observability expansion:** this roadmap changes execution behavior and correctness gates only, except for bounded evidence required by those gates.
-- **2026-08-10 — Keep full automation explicit:** no default routing change is proposed before matched representative evaluation.
+- **2026-08-10 — Remove full automation from the active surface:** no default routing change is proposed before matched representative evaluation and a separate approval.
 - **2026-08-10 — Preserve narrow concurrency:** the first automated architecture keeps at most two mutating children and no workflow grandchildren.
 - **Superseding decision — Remove explicit workflow planning:** `subagent_auto`, the built-in planner, deterministic objective-to-DAG compilation, and graph patches are removed; callers should use explicit `subagent.workflow` when they need a graph.
 - **2026-08-10 — Complete authoritative verified execution:** explicit verified workflows now require executor-owned exact-tree checks, managed integration acceptance, current independent receipts, and at most one bounded rework cycle without changing omitted workflow behavior.

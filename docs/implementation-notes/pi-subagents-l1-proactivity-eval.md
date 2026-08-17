@@ -1,9 +1,12 @@
 # pi-subagents L1 proactivity evaluation
 
 Original date: 2026-05-17
-Updated: 2026-07-23
+Updated: 2026-08-17
 
-> Historical evaluation. On 2026-07-23, the detached wait tool was removed and opt-in `stateful.completionDelivery: "auto-resume"` added the bounded autonomous scheduler that this note previously rejected by default.
+> Historical evaluation.
+> On 2026-07-23, the detached wait tool was removed and opt-in `stateful.completionDelivery: "auto-resume"` added bounded automatic completion synthesis.
+> On 2026-08-16, `scout` was renamed to `explorer`.
+> The built-in `reviewer` and `planner` roles were removed, so current review guidance should use the main agent, review skills, deterministic checks, or custom verifier agents.
 
 ## Method
 
@@ -23,6 +26,9 @@ The policy remains tool prompt metadata and documentation, not autonomous tool s
 
 ## Decision matrix
 
+The rows below preserve the historical evaluated expectations.
+Current replacements are noted above and were not re-evaluated in this historical record.
+
 | # | Prompt/shape | Expected | Result |
 | --- | --- | --- | --- |
 | 1 | Audit a completed branch for release blockers needed in the current response. | Use blocking review under default next-turn delivery; prefer one detached reviewer under auto-resume. | PASS |
@@ -40,9 +46,9 @@ Summary: 10 PASS, 0 FAIL.
 
 ## Automated evidence
 
-- `packages/pi-subagents/test/subagents.test.ts` asserts consistent blocking guidance, disabled-state behavior, and immediate delivery-policy metadata refresh.
-- `packages/pi-subagents/test/orchestration.test.ts` asserts default next-turn and opt-in auto-resume spawn guidance.
-- `packages/pi-subagents/test/evolution.test.ts` asserts stateful tools are default-on, can be disabled, and expose the no-immediate-wait guidance.
+- `packages/pi-subagents/test/subagents-registration.test.ts` asserts consistent blocking guidance.
+- `packages/pi-subagents/test/subagents-settings-ui.test.ts` asserts disabled-state behavior and immediate delivery-policy metadata refresh.
+- `packages/pi-subagents/test/stateful-tool-registration.test.ts` asserts default next-turn and opt-in auto-resume spawn guidance.
 - `npm run check` is the release gate.
 
 ## Runtime boundary

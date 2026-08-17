@@ -6,7 +6,7 @@
 
 ## Historical decision
 
-Automation is a separate `subagent_auto` tool rather than another field in `subagent`.
+The historical implementation made automation a separate `subagent_auto` tool rather than another field in `subagent`.
 
 The existing `subagent` TypeBox schema is 27,782 serialized UTF-8 bytes with 20 top-level fields.
 The dedicated automation schema is 2,635 bytes with one top-level `request` field.
@@ -15,13 +15,14 @@ Both schemas use provider-compatible JSON Schema objects and `StringEnum` values
 
 The rejected alternative was an `automation` field inside `subagent`.
 It would have increased the already large schema shown on ordinary delegation turns, complicated exactly-one-mode validation, mixed caller-authored and compiler-authored workflow ownership, and made rollback less independent.
-Migration cost for the selected design is additive: existing calls need no change, while automation callers use `subagent_auto({ request })` and can downgrade to caller-authored `subagent.workflow`.
+The historical migration cost was additive: existing calls needed no change, while automation callers used `subagent_auto({ request })` and could downgrade to caller-authored `subagent.workflow`.
+Current versions no longer register `subagent_auto`.
 
 ## Baseline characterization
 
 | Boundary | Existing owner | Focused evidence |
 | --- | --- | --- |
-| Mode validation and preflight | `src/execution.ts` requires exactly one explicit mode, preflights all targets/contracts, and disables nested workflow/panel calls | `test/subagents.test.ts` |
+| Mode validation and preflight | `src/execution.ts` requires exactly one explicit mode, preflights all targets/contracts, and disables nested workflow/panel calls | blocking execution and registration tests |
 | Capability routing | `src/capability-router.ts` filters manifests, effective tools, verification roles, filesystem class, cost, and latency | `test/capability-router.test.ts` |
 | Admission | `src/admission-policy.ts` returns parent-owned, one-child, verified-child, bounded-two-child, or abstention recommendations | `test/admission-policy.test.ts` |
 | Execution plans | `src/execution-plan.ts` hashes executor-owned agent, authority, target, workspace, transport, budget, generation, and admission records | `test/execution-plan.test.ts` |
@@ -29,7 +30,7 @@ Migration cost for the selected design is additive: existing calls need no chang
 | Verified completion | `src/verification-policy.ts` and `src/workflow-verification.ts` require one distinct current-tree `structured-v2` receipt | workflow-verification tests |
 | Prompt resources | `src/consult-resources.ts` and `src/prompt-resources.ts` disable extensions and gate project resources by effective trust | consultation and prompt-resource tests |
 
-The automation implementation reuses those boundaries rather than adding another execution engine.
+The historical automation implementation reused those boundaries rather than adding another execution engine.
 
 ## Versioned contracts and limits
 
@@ -46,7 +47,7 @@ A worktree request fails closed because the blocking workflow executor does not 
 
 ## Planner and compiler boundary
 
-The built-in planner receives only `read`, `grep`, `find`, and `ls`.
+The historical built-in planner received only `read`, `grep`, `find`, and `ls`.
 Extensions, retained sessions, and workflow descendants are disabled.
 Trusted current projects receive bounded project context; untrusted targets receive no inherited project resources and cannot pass compiler trust admission.
 Planner work reserves at most 60 seconds and one quarter of the request's aggregate timeout, turns, and tool calls.
@@ -91,6 +92,7 @@ The offline result proves contract and harness determinism only; it does not est
 ## Compatibility and rollback
 
 Existing `subagent` payloads and omitted behavior are unchanged.
-Disable blocking delegation to remove both `subagent` and `subagent_auto`, or use caller-authored `subagent.workflow` when exact deterministic task control is required.
-Older package versions do not register the new tool and ignore the separate versioned automation records.
-No settings migration, publication, package default change, learned router, release, or recursive team behavior is included.
+Current versions never register `subagent_auto`.
+Use caller-authored `subagent.workflow` when exact deterministic task control is required.
+Older package versions ignore the separate versioned automation records.
+No settings migration, publication, package default change, learned router, release, or recursive team behavior remains active from this historical design.

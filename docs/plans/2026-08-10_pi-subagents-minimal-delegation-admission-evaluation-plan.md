@@ -5,7 +5,7 @@
 
 ## Plan Relationship
 
-This plan is the sole owner of matched delegation-admission evidence and the **Admit**, **Revise**, or **Defer** decision required before any full-automation default change.
+This plan is the sole owner of matched delegation-admission evidence and the **Admit**, **Revise**, or **Defer** decision required before any adaptive or default delegation-routing change.
 
 The [verified execution loop plan](archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md) owns fresh exact-tree acceptance and bounded rework behavior.
 
