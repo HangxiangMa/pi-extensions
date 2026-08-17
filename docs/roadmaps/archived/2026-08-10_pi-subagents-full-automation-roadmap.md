@@ -4,8 +4,8 @@
 - **Active work:** None; unchecked items below are not active tasks unless a new approved plan reopens them.
 - **Audience:** `@narumitw/pi-subagents` maintainers and contributors.
 - **Planning horizon:** Evidence-qualified phases without delivery dates.
-- **Baseline:** [`Pi Subagents Delegation Intelligence Roadmap`](2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
-- **Research basis:** The three AlphaXiv reports under [`docs/research/`](../research/) covering orchestration, collaboration, and verification.
+- **Baseline:** [`Pi Subagents Delegation Intelligence Roadmap`](../2026-08-10_pi-subagents-delegation-intelligence-roadmap.md).
+- **Research basis:** The three AlphaXiv reports under [`docs/research/`](../../research/) covering orchestration, collaboration, and verification.
 
 ## Vision
 
@@ -40,10 +40,10 @@ Keep `pi-subagents` as the owner of workflow state, authority, integration admis
 
 | Concern | Current owner | Relationship to earlier plans |
 | --- | --- | --- |
-| Independent acceptance, immutable verification, and bounded rework | [`Verified Execution Loop Plan`](../plans/archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md) | Implemented as the explicit `workflow.verifiedExecution` surface and archived with its verification record. |
-| Objective-to-DAG compilation and graph revision | [`Autonomous Workflow Planning Plan`](../plans/archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) | Historical only; the explicit `subagent_auto` surface and built-in planner are removed. |
-| Rolling scheduling, recovery, persistence reconciliation, and resume | [`Event-Driven Workflow Runtime Plan`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) | Continues the dependency scheduler and semantic snapshot baseline without duplicating it. |
-| Matched evidence before a default change | [`Minimal Delegation Admission Evaluation Plan`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) | Remains the sole active admission evidence gate. |
+| Independent acceptance, immutable verification, and bounded rework | [`Verified Execution Loop Plan`](../../plans/archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md) | Implemented as the explicit `workflow.verifiedExecution` surface and archived with its verification record. |
+| Objective-to-DAG compilation and graph revision | [`Autonomous Workflow Planning Plan`](../../plans/archived/2026-08-10_pi-subagents-autonomous-workflow-planning-plan.md) | Historical only; the explicit `subagent_auto` surface and built-in planner are removed. |
+| Rolling scheduling, recovery, persistence reconciliation, and resume | [`Event-Driven Workflow Runtime Plan`](../../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) | Continues the dependency scheduler and semantic snapshot baseline without duplicating it. |
+| Matched evidence before a default change | [`Minimal Delegation Admission Evaluation Plan`](../../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) | Remains the sole active admission evidence gate. |
 
 The original implementation plans were removed after their durable decisions and remaining obligations moved to the owners above; Git preserves their design history.
 
@@ -72,7 +72,7 @@ The original implementation plans were removed after their durable decisions and
 
 **Outcome:** Autonomous execution has a trustworthy stopping condition and a bounded correction loop.
 
-**Completed plan:** [`2026-08-10_pi-subagents-verified-execution-loop-plan.md`](../plans/archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md).
+**Completed plan:** [`2026-08-10_pi-subagents-verified-execution-loop-plan.md`](../../plans/archived/2026-08-10_pi-subagents-verified-execution-loop-plan.md).
 
 ### Phase 2: Accept one objective and construct the workflow
 
@@ -91,7 +91,7 @@ The original implementation plans were removed after their durable decisions and
 
 **Outcome:** Automation continues productively through ordinary failures and interruptions while retaining one authoritative workflow state machine.
 
-**Execution plan:** [`2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md).
+**Execution plan:** [`2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md`](../../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md).
 
 ### Phase 4: Historical production-use gate
 
