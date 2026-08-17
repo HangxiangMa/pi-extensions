@@ -228,7 +228,7 @@ The main agent owns `src/parser.ts`, immediately continues that work after spawn
 ```
 
 For two or more implementation workers, issue one spawn per disjoint slice, state each file or responsibility boundary, and keep integration in the main agent.
-Use isolated worktrees for repository-write isolation, or set `allowConcurrentWrites` only when shared-workspace overlap is knowingly safe.
+Shared-workspace agents may write concurrently by default; use isolated worktrees when repository-write isolation is required.
 
 A blocking fan-out is reserved for output that must be synthesized before the main agent continues:
 
@@ -665,7 +665,7 @@ This avoids lifecycle-driven tool-schema churn and preserves a stable provider p
 | Tool | Purpose |
 | --- | --- |
 | `subagent_spawn` | Start detached work with optional task-selected thinking and retained timeout, exact-retry `idempotencyKey`, and `text`, `structured-v1`, or `structured-v2` result format; return an opaque `agentId` immediately and deliver completion asynchronously. |
-| `subagent_send` | Send follow-up work with an optional one-turn timeout override and trigger a new turn on a reusable agent; semantic skew requires explicit `revalidate: true`, and shared-workspace write conflicts are guarded unless explicitly overridden. |
+| `subagent_send` | Send follow-up work with an optional one-turn timeout override and trigger a new turn on a reusable agent; semantic skew requires explicit `revalidate: true`, and shared-workspace concurrency is allowed by default. |
 | `subagent_manage` | Use `"interrupt"` to retain an agent after aborting active work or `"close"` to release it; both actions accept optional `subtree`. Use `subagent_inspect` for all list and detail operations. |
 | `subagent_mailbox` | Use `action: "send"` for queue-only messages that do not start a turn, or `"read"` to read and optionally acknowledge unread messages. |
 
@@ -773,11 +773,11 @@ No private Pi imports, runtime casts, or `ExtensionAPI` monkey-patching are used
 The package uses public Pi root RPC types but owns exact CLI resolution, bounded framing, readiness, stderr, cancellation, and process-group cleanup because the stock client does not provide those package-specific guarantees.
 Approval policy, sandbox profile, provider-header hooks, extension state, global scheduling, and parent/child transcript switching are not inherited or provided by in-process or RPC transport.
 
-Write-capable agents share the workspace by default.
-Concurrent write-capable starts in the same cwd are rejected unless `allowConcurrentWrites` is explicitly set.
-Classification is intentionally conservative: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox.
-Keep one existing bounded detached worker only while the main agent continues its named non-overlapping work, or close it before handling the work directly.
-For truly independent disjoint write slices, use isolated worktrees, or set `allowConcurrentWrites` only when shared overlap is knowingly safe.
+Write-capable detached agents share the workspace and may run concurrently by default.
+Classification remains intentionally conservative for automatic transport selection: an agent with `bash`, `write`, or `edit` is write-capable even when its task prompt says “read only,” because prompt wording is not a filesystem sandbox.
+Assign disjoint file or responsibility ownership to concurrent writers and keep integration in the main agent.
+Use isolated worktrees when repository-write isolation is required.
+The deprecated `allowConcurrentWrites` field remains accepted for compatibility but no longer changes admission behavior.
 Use the blocking batch only when synchronous outputs justify making the main agent unavailable.
 
 Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; this requires a clean repository and the worktree is removed on close or session shutdown. The generated path inherits the approved base cwd's trust snapshot. Retained records mark disposable worktrees explicitly, so they are never restored even if cleanup could not remove the generated directory. Shared-workspace retained records store an additive bounded target-trust snapshot for transport and inspection parity; session restore canonicalizes the retained cwd and re-resolves current/saved trust rather than blindly trusting the persisted value. Older records without either field remain readable.
@@ -786,6 +786,8 @@ Set `workspaceMode: "worktree"` to opt into a disposable detached Git worktree; 
 
 Existing accepted `subagent` payload shapes remain unchanged.
 `subagent_spawn` adds optional `idempotencyKey` and `resultFormat` fields without changing omitted behavior.
+`allowConcurrentWrites` remains accepted by `subagent_spawn` and `subagent_send` as a deprecated no-op so stored or resumed calls remain valid.
+Spawn request identity continues to include its submitted value for exact-retry compatibility.
 Older releases do not recognize `stateful.transport: "rpc"` or `"auto"`; change the value to `"subprocess"` and reload before downgrading.
 Retained records remain transport-neutral, and older readers ignore the additive idempotency and context-footprint fields while the state version remains compatible.
 The `tasks` schema now advertises the absolute 64-item safety bound, while the effective `blocking.maxParallelTasks` value may be lower.

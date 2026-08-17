@@ -3,53 +3,8 @@ import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./agents/discovery.js";
 import type { AgentScope, SubagentSettings } from "./agents/types.js";
-import type { AgentRegistry, ManagedAgent } from "./registry.js";
 import { safeTerminalLine } from "./safe-text.js";
 import { readSubagentSettings } from "./settings.js";
-
-export function assertNoSharedWriteConflict(
-	registry: AgentRegistry,
-	agentName: string,
-	cwd: string,
-	scope: AgentScope,
-	settings?: SubagentSettings,
-): void {
-	const agents = discoverAgents(cwd, scope, settings ?? readSubagentSettings()).agents;
-	const requested = agents.find((agent) => agent.name === agentName);
-	if (!isWriteCapable(requested?.tools)) return;
-	for (const active of registry.list()) {
-		if (
-			!isSameCwd(active.cwd, cwd) ||
-			(active.state !== "running" && active.state !== "starting")
-		) {
-			continue;
-		}
-		const activeConfig = agents.find((agent) => agent.name === active.agent);
-		if (isWriteCapable(activeConfig?.tools)) {
-			throw new Error(
-				`Write-capable subagent ${active.id} is already active in shared workspace ${cwd}. ` +
-					"Keep the existing bounded subagent_spawn and continue the main agent's named non-overlapping work, or close it before handling the work directly. For truly independent disjoint write slices, use workspaceMode worktree; set allowConcurrentWrites only when shared overlap is knowingly safe. Use the blocking subagent parallel mode only when concurrent synchronous outputs justify making the main agent unavailable.",
-			);
-		}
-	}
-}
-
-export function assertFollowUpWriteAllowed(
-	registry: AgentRegistry,
-	agent: ManagedAgent,
-	allowConcurrentWrites: boolean,
-	isolatedWorkspace: boolean,
-	settings?: SubagentSettings,
-): void {
-	if (allowConcurrentWrites || isolatedWorkspace) return;
-	assertNoSharedWriteConflict(
-		registry,
-		agent.agent,
-		agent.cwd,
-		agent.agentScope ?? "user",
-		settings,
-	);
-}
 
 export function isWriteCapable(tools: string[] | undefined): boolean {
 	if (!tools) return true;

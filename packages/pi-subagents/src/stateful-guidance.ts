@@ -27,7 +27,7 @@ export function createSpawnPromptGuidelines(
 					"When subagent_spawn fits the completion-delivery policy, do not choose a blocking parallel subagent merely to keep delegation in the same turn.",
 				]
 			: []),
-		"Add another subagent_spawn only for truly independent work with safe workspace concurrency and disjoint write ownership; the main agent still owns integration.",
+		"Add another subagent_spawn only for truly independent work with safe workspace concurrency and disjoint write ownership; shared workspaces permit concurrent writes by default, so use workspaceMode worktree when repository isolation is required. The main agent still owns integration.",
 		"After subagent_spawn returns, immediately continue the identified local task; do not merely announce the spawn, wait, poll, or end the response while useful local work remains.",
 		'Consume and synthesize available subagent_spawn completion messages; use subagent_manage with action "interrupt" or "close" for agents that are no longer needed.',
 		'Completion from subagent_spawn is delivered automatically. Do not poll with subagent_inspect or subagent_mailbox action "read", repeatedly check progress, or duplicate the delegated work.',

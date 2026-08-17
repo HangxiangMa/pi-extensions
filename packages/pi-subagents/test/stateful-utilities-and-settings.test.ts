@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { AgentRegistry } from "../src/registry.js";
 import { normalizeSubagentSettings } from "../src/settings.js";
 import {
-	assertFollowUpWriteAllowed,
 	formatStatefulAgentLine,
 	isWriteCapable,
 	resolveCompletionDelivery,
@@ -15,36 +13,11 @@ import { waitForOwnedSpawn } from "../src/stateful-lifecycle.js";
 import { resolveStatefulSubprocessThinkingLevel } from "../src/subprocess-transport.js";
 import { record } from "./orchestration-test-helpers.js";
 
-test("shared-workspace write classification and follow-up guards are conservative", async () => {
+test("write classification remains conservative for automatic transport selection", () => {
 	assert.equal(isWriteCapable(undefined), true);
 	assert.equal(isWriteCapable(["read", "grep"]), false);
 	assert.equal(isWriteCapable(["read", "bash"]), true);
 	assert.equal(isWriteCapable(["edit"]), true);
-	const registry = new AgentRegistry(async (_agent, _task, signal) => {
-		await new Promise<void>((resolve) =>
-			signal.addEventListener("abort", () => resolve(), { once: true }),
-		);
-		return { output: "interrupted", exitCode: 130, aborted: true };
-	});
-	const active = await registry.spawn({ agent: "worker", task: "active", cwd: process.cwd() });
-	const followUp = record({ agent: "worker", cwd: process.cwd(), state: "completed" });
-	assert.throws(
-		() => assertFollowUpWriteAllowed(registry, followUp, false, false),
-		(error: unknown) => {
-			assert.match(String(error), /already active in shared workspace/);
-			assert.match(String(error), /keep the existing bounded subagent_spawn/i);
-			assert.match(String(error), /continue.*main agent.*non-overlapping work/i);
-			assert.match(String(error), /close it before.*directly/i);
-			assert.match(String(error), /blocking subagent parallel mode.*synchronous outputs/i);
-			assert.doesNotMatch(String(error), /combined asynchronous work/i);
-			assert.match(String(error), /disjoint write slices.*worktree/i);
-			assert.match(String(error), /allowConcurrentWrites/);
-			return true;
-		},
-	);
-	assert.doesNotThrow(() => assertFollowUpWriteAllowed(registry, followUp, true, false));
-	assert.doesNotThrow(() => assertFollowUpWriteAllowed(registry, followUp, false, true));
-	await registry.interrupt(active.id);
 });
 
 test("stateful agent lines escape terminal controls from retained agent data", () => {

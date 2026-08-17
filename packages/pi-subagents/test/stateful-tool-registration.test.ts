@@ -86,7 +86,19 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.match(spawn.parameters.properties?.idleTimeoutMs?.description ?? "", /completed/i);
 		assert.match(spawn.parameters.properties?.maxTurns?.description ?? "", /assistant turns/i);
 		assert.match(spawn.parameters.properties?.maxToolCalls?.description ?? "", /tool calls/i);
+		assert.match(
+			spawn.parameters.properties?.allowConcurrentWrites?.description ?? "",
+			/deprecated compatibility field.*allowed by default/i,
+		);
+		assert.match(
+			spawn.parameters.properties?.workspaceMode?.description ?? "",
+			/shared workspace \(default\).*worktree/i,
+		);
 		assert.match(spawn.promptGuidelines.join("\n"), /timeoutMs.*task difficulty/i);
+		assert.match(
+			spawn.promptGuidelines.join("\n"),
+			/shared workspaces permit concurrent writes by default.*workspaceMode worktree/i,
+		);
 
 		const send = mock.tools.find((tool) => tool.name === "subagent_send") as {
 			description: string;
@@ -103,6 +115,10 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		assert.match(
 			send.parameters.properties?.revalidate?.description ?? "",
 			/semantic resource snapshot/i,
+		);
+		assert.match(
+			send.parameters.properties?.allowConcurrentWrites?.description ?? "",
+			/deprecated compatibility field.*allowed by default/i,
 		);
 		const manage = mock.tools.find((tool) => tool.name === "subagent_manage") as {
 			description: string;
