@@ -222,10 +222,20 @@ test("formatAgentCatalog advertises scope variants deterministically and within 
 		const second = formatAgentCatalog({ user, project }, { maxCharacters: 5_000 });
 		assert.equal(first.text, second.text);
 		assert.match(first.text, /explorer \[source: built-in; agentScope: "user"\]/);
+		assert.match(first.text, /capabilities: repository-search, code-evidence/);
+		assert.match(first.text, /tools: read, grep, find, ls/);
+		assert.match(first.text, /filesystem: read/);
+		assert.match(first.text, /result formats: text, structured-v1, structured-v2/);
+		assert.match(first.text, /use capability and tool identifiers exactly as shown/i);
+		assert.match(first.text, /enforced.*readPaths.*writePaths.*network.*secrets.*unsupported/i);
 		assert.match(
 			first.text,
 			/explorer \[source: project; requires agentScope: "project" or "both"/,
 		);
+		assert.match(first.text, /capabilities: undeclared/);
+		assert.match(first.text, /tools: read, bash, edit, write/);
+		assert.match(first.text, /filesystem: undeclared/);
+		assert.match(first.text, /result formats: undeclared/);
 		assert.match(first.text, /Project/);
 		assert.match(first.text, /Same-name precedence/);
 		assert.match(first.text, /project \[source: project/);

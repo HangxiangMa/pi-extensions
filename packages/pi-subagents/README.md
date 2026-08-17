@@ -107,9 +107,10 @@ Custom transcript rendering is TUI presentation only. Tool names, parameter sche
 
 After each session starts, the descriptions of the registered `subagent`, `subagent_spawn`, and
 `subagent_consult` tools include the same bounded parent-facing catalog of the agents available in
-that session. Entries show the source (`built-in`, `user`, or `project`) and the `agentScope` needed to
-invoke them; the `agent` parameters remain unconstrained strings for cwd and scope flexibility. The
-catalog is rebuilt on
+that session. Entries show the source (`built-in`, `user`, or `project`), required `agentScope`,
+declared capability identifiers, configured tools, filesystem authority, and supported result
+formats; the `agent` parameters remain unconstrained strings for cwd and scope flexibility. The
+catalog also warns that enforced path, network, and secret guarantees are unsupported. It is rebuilt on
 `/reload` or the next session start, and omitted entries are reported explicitly when the catalog
 exceeds its metadata bounds.
 
@@ -175,8 +176,11 @@ are registered, `subagent_spawn` adds detached guidance for the active completio
 Changing the policy through `/subagents settings` refreshes that guidance immediately.
 
 The `subagent`, `subagent_spawn`, and `subagent_consult` descriptions advertise the current agent
-catalog automatically; no preliminary list call is needed. Built-ins and user agents appear under the
-default `agentScope: "user"`. Trusted project agents appear separately and explicitly require
+catalog automatically; no preliminary list call is needed. Each entry exposes the exact declared
+capability and tool identifiers needed by an enforced contract, plus filesystem authority and result
+formats. Agents without a valid capability manifest are labeled `undeclared` instead of implying
+support. Built-ins and user agents appear under the default `agentScope: "user"`. Trusted project
+agents appear separately and explicitly require
 `agentScope: "project"` or `"both"`; project-authored names and descriptions are not read into
 metadata for untrusted projects. If a project definition
 shares a name with a user or built-in definition, the user version is the default and the project
@@ -878,6 +882,8 @@ test coverage, and migration risks. Report PASS/FAIL/PARTIAL with evidence.
 `capabilityManifest` is optional for legacy custom agents and never grants authority by itself.
 Explicit workflow routing can match declared capabilities, configured tools, filesystem authority, verification roles, and low/medium/high cost or latency hints.
 A missing or malformed manifest remains unknown and cannot satisfy a capability-routed task.
+The parent-facing catalog exposes contract-relevant declarations before the first delegation decision.
+Use those identifiers exactly; enforced `readPaths`, `writePaths`, network, and secret guarantees are currently unsupported and require an external enforcement boundary.
 
 `agentScope` is a top-level tool argument supplied per invocation. It is not a setting in
 `~/.pi/agent/pi-subagents.json` and does not belong in agent frontmatter. The parent-facing tool
