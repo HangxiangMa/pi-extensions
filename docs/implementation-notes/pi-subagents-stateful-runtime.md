@@ -1,7 +1,7 @@
 # pi-subagents stateful runtime decision
 
 Date: 2026-07-11
-Updated: 2026-08-02
+Updated: 2026-08-17
 
 ## Decision
 
@@ -61,7 +61,9 @@ restored persisted state -> idle -> explicit follow-up -> starting
 
 - `starting` means queued for an active-turn slot.
 - `running` owns one `AbortController` and one transport turn.
-- `subagent_spawn` returns immediately. Under default next-turn delivery, prompt guidance uses it only when the current response does not depend on its result; under auto-resume, related broad research/review may be final-answer-dependent.
+- `subagent_spawn` returns immediately.
+  Prompt guidance keeps ordinary review in the main agent and reserves detached review for consequential independent verification with concrete parallel value.
+  Under default next-turn delivery, detached work is allowed only when the current response does not depend on its result; under auto-resume, qualifying detached work may be final-answer-dependent.
 - Blocking `subagent` batches are reserved for delegated outputs required before the root's next action because queued steering cannot be processed until the call returns. Critical-path work the root can perform directly remains local.
 - Settled turns emit bounded `pi-subagent-completion` custom messages. The default does not wake an idle root; opt-in auto-resume batches a dispatch window and requests one synthesis turn.
 - Active parent work is not interrupted; `agent_settled` schedules the held batch. User or extension input already pending at flush time suppresses auto-resume, and a parent `agent_start` acknowledgement clears the pre-set one-wake guard.

@@ -346,6 +346,12 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 			/before.*one.*subagent_spawn.*identify.*non-overlapping.*main-agent work.*start immediately.*integration path/i,
 		);
 		assert.match(spawnGuidance, /prefer one subagent_spawn.*broad.*research/i);
+		assert.match(spawnGuidance, /ordinary review.*main agent.*review skill.*deterministic checks/i);
+		assert.match(
+			spawnGuidance,
+			/detached review.*consequential independent verification.*concrete parallel value/i,
+		);
+		assert.doesNotMatch(spawnGuidance, /broad asynchronous research or review/i);
 		assert.match(spawnGuidance, /next-turn.*default/i);
 		assert.match(spawnGuidance, /current response.*does not depend/i);
 		assert.match(spawnGuidance, /blocking subagent.*final answer.*depends/i);
@@ -457,6 +463,15 @@ test("stateful tools are available by default, disable cleanly, and expose the l
 		const autoResumeGuidance = autoResumeSpawn.promptGuidelines.join("\n");
 		assert.match(autoResumeGuidance, /auto-resume/i);
 		assert.match(autoResumeGuidance, /even when.*final answer.*depends/i);
+		assert.match(
+			autoResumeGuidance,
+			/ordinary review.*main agent.*review skill.*deterministic checks/i,
+		);
+		assert.match(
+			autoResumeGuidance,
+			/detached review.*consequential independent verification.*concrete parallel value/i,
+		);
+		assert.doesNotMatch(autoResumeGuidance, /broad asynchronous research or review/i);
 		assert.match(autoResumeGuidance, /immediately continue.*identified.*local task/i);
 		assert.doesNotMatch(autoResumeGuidance, /tell the user.*end the response/i);
 		assert.doesNotMatch(autoResumeGuidance, /next-turn.*default/i);
