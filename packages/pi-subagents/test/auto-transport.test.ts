@@ -55,7 +55,7 @@ test("AutoTransport deterministically routes before launch and retains the selec
 	const subprocess = new FakeTransport("subprocess");
 	const inProcess = new FakeTransport("in-process");
 	const rpc = new FakeTransport("rpc");
-	let settings: SubagentSettings | undefined = { agents: { explorer: { tools: ["read"] } } };
+	let settings: SubagentSettings | undefined;
 	const transport = new AutoTransport({
 		subprocess,
 		inProcess,

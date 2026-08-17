@@ -10,7 +10,7 @@ export const BUILT_IN_AGENTS: AgentConfig[] = [
 		name: "explorer",
 		description:
 			"Read-only codebase exploration for specific questions; returns concise findings with paths and evidence.",
-		tools: ["read", "grep", "find", "ls", "bash"],
+		tools: ["read", "grep", "find", "ls"],
 		capabilityManifest: builtInManifest(["repository-search", "code-evidence"], "read", [
 			"evidence-gathering",
 		]),
@@ -19,7 +19,7 @@ export const BUILT_IN_AGENTS: AgentConfig[] = [
 		filePath: "built-in:explorer",
 		systemPrompt: [
 			"You are an explorer subagent. Explore the codebase for specific, well-scoped questions and report grounded findings.",
-			"Do not edit files. Use bash only for safe read-only inspection commands.",
+			"Do not edit files, run shell commands, or use any tool outside the read-only inspection set.",
 			"Do not install dependencies, run formatters, start servers, run tests, or execute long-running commands.",
 			"Return concise bullets with exact file paths, symbols, and open questions.",
 		].join("\n"),

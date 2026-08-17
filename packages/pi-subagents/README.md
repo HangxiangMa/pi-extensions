@@ -764,7 +764,7 @@ Built-in agents are available without setup and can be overridden by user or pro
 
 | Agent | Purpose | Tools |
 | --- | --- | --- |
-| `explorer` | Read-only codebase exploration for specific questions. | `read`, `grep`, `find`, `ls`, `bash` |
+| `explorer` | Read-only codebase exploration for specific questions. | `read`, `grep`, `find`, `ls` |
 | `worker` | General-purpose implementation. | Pi default tools |
 
 Review-specific delegation should use a custom user or project agent when needed.
@@ -808,7 +808,7 @@ Example:
 ---
 name: api-reviewer
 description: Review API changes for compatibility and tests
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls
 model: sonnet
 thinkingLevel: high
 capabilityManifest:

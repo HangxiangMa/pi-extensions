@@ -79,6 +79,7 @@ test("built-in lookup is immutable when a user agent and settings override the s
 		assert.equal(builtIn?.model, undefined);
 		assert.equal(builtIn?.thinkingLevel, undefined);
 		assert.equal(getBuiltInAgent("explorer")?.thinkingLevel, "low");
+		assert.deepEqual(getBuiltInAgent("explorer")?.tools, ["read", "grep", "find", "ls"]);
 		assert.equal(getBuiltInAgent("worker")?.thinkingLevel, undefined);
 		assert.equal(getBuiltInAgent("planner"), undefined);
 		assert.equal(getBuiltInAgent("scout"), undefined);
