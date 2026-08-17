@@ -53,8 +53,8 @@ function workflowEffects(current: DelegationWorkflow, next: DelegationWorkflow):
 	if (asyncEnabled(current) !== asyncEnabled(next)) {
 		effects.push(
 			asyncEnabled(next)
-				? "Add reusable async lifecycle tools"
-				: "Remove reusable async lifecycle tools",
+				? "Add async `subagent_spawn`, `subagent_send`, `subagent_manage`, and `subagent_mailbox`"
+				: "Remove async `subagent_spawn`, `subagent_send`, `subagent_manage`, and `subagent_mailbox`",
 		);
 	}
 	return effects;

@@ -2,7 +2,9 @@
 
 [![npm](https://img.shields.io/npm/v/@narumitw/pi-subagents)](https://www.npmjs.com/package/@narumitw/pi-subagents) [![Pi extension](https://img.shields.io/badge/Pi-extension-blue)](https://pi.dev) [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
-`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents. By default, it exposes seven capability-specific tools: blocking batches, four detached lifecycle tools, side-effect-free inspection, and synchronous read-only consultation. Users can keep every delegation method, choose async-only delegation, retain only blocking delegation, or disable delegation while keeping inspection available.
+`@narumitw/pi-subagents` is a native [Pi coding agent](https://pi.dev) extension for delegating work to specialized agents.
+By default, it exposes seven capability-specific tools: blocking batches, four detached lifecycle tools, side-effect-free inspection, and synchronous read-only consultation.
+The compatibility default remains **All delegation methods**, while **Async only** is the recommended smaller surface for normal async-first use.
 
 The main agent decides whether to delegate and retains overall planning, immediate critical-path work, integration, final verification, and the final answer.
 Use `explorer` for bounded read-only evidence and `worker` for a bounded implementation slice with clear ownership when delegation creates real parallelism.
@@ -10,7 +12,7 @@ One ordinary async worker requires named non-overlapping main-agent work that st
 
 ## ✨ Features
 
-- Offers all delegation methods by default, with goal-oriented presets for async-only, blocking-only, or disabled delegation.
+- Keeps all delegation methods as the compatibility default while recommending async-only for a smaller responsive surface.
 - Adds `subagent_inspect` for bounded metadata without child launch, mailbox-content access, acknowledgement, or mutation.
 - Adds `subagent_consult` for one synchronous ephemeral child constrained to built-in `read`, `grep`, `find`, and `ls` tools (or a narrower agent allow-list).
 - Keeps batch workers isolated in `pi --mode json -p --no-session` subprocesses.
@@ -54,16 +56,33 @@ Try this package locally from the repository root:
 pi -e ./packages/pi-subagents
 ```
 
+## 🚀 Quick start
+
+For normal async-first use, run `/subagents`, choose **Change delegation**, select **Async only · Recommended**, confirm the exact tool changes, and reload.
+
+This registers `subagent_spawn`, `subagent_send`, `subagent_manage`, `subagent_mailbox`, and `subagent_inspect` while keeping the main agent responsive.
+
+Default `next-turn` delivery is for work the current response does not require.
+When the final answer depends on detached work, use `/subagents settings` to select **Resume automatically when finished**.
+
+Keep **All delegation methods** when an explicit blocking workflow or synchronous read-only `subagent_consult` is still required.
+
+Async-first delegation still requires useful parallel main-agent work, clear worker ownership, and a supported completion path.
+
 ## 🛠️ Pi tool
 
 `pi-subagents` registers seven tools by default. Run `/subagents`, choose **Change delegation**, review the concrete tool changes, then select **Save and reload** to apply one of these workflows:
 
 | Workflow | Registered tools |
 | --- | --- |
-| **All delegation methods** (default) | Existing five delegation/lifecycle tools, `subagent_inspect`, and `subagent_consult` |
-| **Async only** | Four detached lifecycle tools plus `subagent_inspect`; blocking `subagent` and `subagent_consult` are omitted |
-| **Blocking only** | `subagent`, `subagent_consult`, and `subagent_inspect` |
+| **All delegation methods** (compatibility default) | `subagent`, `subagent_spawn`, `subagent_send`, `subagent_manage`, `subagent_mailbox`, `subagent_inspect`, and `subagent_consult` |
+| **Async only** (recommended) | `subagent_spawn`, `subagent_send`, `subagent_manage`, `subagent_mailbox`, and `subagent_inspect` |
+| **Blocking only** (compatibility) | `subagent`, `subagent_inspect`, and `subagent_consult` |
 | **Disabled** | `subagent_inspect` only; delegation is disabled |
+
+`subagent` and `subagent_consult` remain explicit compatibility routes with no current deprecation deadline.
+The four async lifecycle tools stay separate because starting work, sending follow-ups, managing lifecycle, and queueing mailbox messages have different contracts.
+Any default change, tool removal, or lifecycle consolidation requires a separately approved compatibility migration.
 
 The preview compares the selection with the tools registered in the current session, even when a manual settings edit is pending, and remains read-only until confirmation. Escape or **Cancel** leaves settings unchanged. Tool removal requires an extension reload because Pi does not expose extension tool unregistration. To avoid aborting work or removing isolated worktrees during `session_shutdown`, workflow changes are blocked while detached agents are retained; finish or clear them through **Current agents** first. Pi owns reload-error reporting and does not return a success result to extensions, so the save notification also tells users to run `/reload` if the tool surface does not refresh.
 
@@ -621,7 +640,8 @@ The settings UI patches the raw JSON atomically and preserves unknown fields.
 It refuses to overwrite malformed or invalid settings.
 Supported Pi writers serialize the latest-document read and same-directory temporary-file rename through `pi-subagents.json.mutation-lock`.
 Editors and older extension versions do not participate in that lock, so avoid manual edits while a settings save is in progress.
-`blocking.enabled` defaults to `true`; set it to `false` for async-only delegation.
+`blocking.enabled` defaults to `true`, so **All delegation methods** remains the compatibility default.
+Set it to `false` for the recommended async-only workflow.
 `blocking.maxParallelTasks` defaults to `8` and accepts positive integers from `1` through `64`.
 It limits worker tasks in one blocking parallel call, while execution still starts at most four workers at once and treats an optional aggregator separately.
 `stateful.enabled` also defaults to `true`; its existing `false` value remains the blocking-only workflow.

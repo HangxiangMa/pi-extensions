@@ -26,6 +26,8 @@ Caller-authored workflows remain explicit.
 
 Automation, adaptive routing, wider mutating teams, recursion, and default routing changes require matched evidence and separate approval.
 
+The recommended user-selected workflow is `async-only`, while `all` remains the compatibility default until a separately approved migration.
+
 ## Current surface
 
 The maintained built-in agents are:
@@ -57,9 +59,10 @@ Guidance must not encourage the main agent to spawn one worker and then stop whi
 - synchronous read-only `subagent_consult`;
 - subprocess, in-process, RPC, and automatic transport selection;
 - target trust resolution, context selection, output bounds, timeout checkpoints, and cleanup;
-- capability manifests, execution plans, grants, structured results, WorkItems, semantic snapshots, and verification receipts for opted-in workflows; and
-- generation-aware cancellation and stale-result rejection for the supported contracted paths; and
-- main-agent-led delegation guidance that keeps immediate critical-path work, integration, and final verification in the main agent while allowing bounded parallel worker slices, as recorded in the [completed guidance plan](../plans/archived/2026-08-17_pi-subagents-main-agent-led-delegation-guidance-plan.md).
+- capability manifests, execution plans, grants, structured results, WorkItems, semantic snapshots, and verification receipts for opted-in workflows;
+- generation-aware cancellation and stale-result rejection for the supported contracted paths;
+- main-agent-led delegation guidance that keeps immediate critical-path work, integration, and final verification in the main agent while allowing bounded parallel worker slices, as recorded in the [completed guidance plan](../plans/archived/2026-08-17_pi-subagents-main-agent-led-delegation-guidance-plan.md); and
+- an async-first workflow recommendation that preserves `all` as the compatibility default, retains explicit blocking and consultation routes, and keeps lifecycle tools split, as recorded in the [completed tool-surface plan](../plans/archived/2026-08-17_pi-subagents-async-first-tool-surface-plan.md).
 
 The capability matrix remains the detailed boundary record: [`pi-subagents-capability-matrix.md`](../implementation-notes/pi-subagents-capability-matrix.md).
 
@@ -67,7 +70,6 @@ The capability matrix remains the detailed boundary record: [`pi-subagents-capab
 
 | Follow-up | Owner |
 | --- | --- |
-| Async-first and tool-surface simplification | [`2026-08-17_pi-subagents-async-first-tool-surface-plan.md`](../plans/2026-08-17_pi-subagents-async-first-tool-surface-plan.md) |
 | Rolling runtime for caller-authored workflows | [`2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md`](../plans/2026-08-10_pi-subagents-event-driven-workflow-runtime-plan.md) |
 | Matched evidence before adaptive/default routing | [`2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md`](../plans/2026-08-10_pi-subagents-minimal-delegation-admission-evaluation-plan.md) |
 

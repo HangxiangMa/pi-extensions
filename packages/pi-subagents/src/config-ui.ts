@@ -242,7 +242,7 @@ export async function showSubagentManager(
 						{
 							id: "workflow",
 							label: "Change delegation",
-							description: "Choose all methods, async only, or blocking only",
+							description: "Choose async only (recommended) or a compatibility workflow",
 							to: "workflow",
 						},
 						{
@@ -276,6 +276,8 @@ export async function showSubagentManager(
 					title: "Change Delegation",
 					lines: [
 						`Current: ${workflowLabel(active)}`,
+						"Recommended: Async only keeps the main agent responsive and omits blocking delegation and consultation.",
+						"Final-answer-dependent detached work needs automatic resume.",
 						...(snapshot.value !== active
 							? [`Configured after reload: ${workflowLabel(snapshot.value)}`]
 							: []),
@@ -290,21 +292,21 @@ export async function showSubagentManager(
 						? []
 						: [
 								{
-									id: "all",
-									label: "All delegation methods",
-									description: "Allow blocking batches and reusable async agents",
+									id: "async-only",
+									label: "Async only · Recommended",
+									description: "Detached lifecycle plus inspection; omit blocking and consultation",
 									action: "set-workflow" as const,
 								},
 								{
-									id: "async-only",
-									label: "Async only",
-									description: "Keep the root responsive; remove blocking subagent",
+									id: "all",
+									label: "All delegation methods",
+									description: "Compatibility: async, blocking, inspection, and consultation",
 									action: "set-workflow" as const,
 								},
 								{
 									id: "blocking-only",
 									label: "Blocking only",
-									description: "Keep blocking batches; remove reusable async agents",
+									description: "Compatibility: blocking and consultation without async lifecycle",
 									action: "set-workflow" as const,
 								},
 							],
