@@ -11,6 +11,7 @@ import {
 	type RecallScopeContext,
 } from "./messages.js";
 import {
+	type RecallView,
 	ScopedRecallPicker,
 	type ScopedRecallPickerResult,
 	sanitizeTerminalText,
@@ -51,6 +52,7 @@ export function createRecallMenu(
 ) {
 	let selectedRecordId: string | undefined;
 	let selectedScope: RecallScope = "cwd";
+	let selectedView: RecallView = "all";
 	let pickerSelectedId: string | undefined;
 	let pickerQuery = "";
 
@@ -183,12 +185,14 @@ export function createRecallMenu(
 							signal,
 							ownership,
 							selectedScope,
+							selectedView,
 							pickerSelectedId,
 							pickerQuery,
 						);
 						if (signal.aborted || !isCurrent(ownership)) return { kind: "close" };
 						if (!result) return { kind: "stay" };
 						selectedScope = result.scope;
+						selectedView = result.view;
 						pickerQuery = result.query ?? pickerQuery;
 						if ("selectedId" in result) pickerSelectedId = result.selectedId;
 						if (result.kind === "back") return { kind: "stay" };
@@ -250,6 +254,7 @@ export function createRecallMenu(
 				if (!result || result.kind === "back") return { kind: "stay" };
 				if (result.kind === "close") return { kind: "close" };
 				selectedScope = result.scope;
+				selectedView = result.view;
 				pickerSelectedId = result.recordId;
 				selectedRecordId = result.recordId;
 				return { kind: "to", screen: "selected" };
@@ -365,6 +370,7 @@ async function chooseSavedInTui(
 	signal: AbortSignal,
 	ownership: { isCurrent?: () => boolean },
 	initialScope: RecallScope,
+	initialView: RecallView,
 	initialSelectedId: string | undefined,
 	initialQuery: string,
 ): Promise<ScopedRecallPickerResult | undefined> {
@@ -381,6 +387,7 @@ async function chooseSavedInTui(
 				records: state.records,
 				current: state.current,
 				initialScope,
+				initialView,
 				initialSelectedId,
 				initialQuery,
 				complete,
@@ -404,16 +411,16 @@ async function chooseSavedInRpc(
 	const selectedScopeLabel = await ctx.ui.select("Choose scope", orderedOptions, { signal });
 	if (signal.aborted) return undefined;
 	if (!selectedScopeLabel || selectedScopeLabel === "Back") {
-		return { kind: "back", scope: initialScope };
+		return { kind: "back", scope: initialScope, view: "all" };
 	}
 	const scope = Object.entries(SCOPE_LABELS).find(
 		([, label]) => label === selectedScopeLabel,
 	)?.[0] as RecallScope | undefined;
-	if (!scope) return { kind: "back", scope: initialScope };
+	if (!scope) return { kind: "back", scope: initialScope, view: "all" };
 	const records = filterRecallMessages(state.records, scope, state.current).reverse();
 	if (records.length === 0) {
 		safeNotify(ctx, `No saved messages in ${SCOPE_LABELS[scope]}.`, "info");
-		return { kind: "back", scope };
+		return { kind: "back", scope, view: "all" };
 	}
 	const labels = records.map(
 		(record, index) =>
@@ -421,12 +428,12 @@ async function chooseSavedInRpc(
 	);
 	const choice = await ctx.ui.select("Choose saved message", [...labels, "Back"], { signal });
 	if (signal.aborted) return undefined;
-	if (!choice || choice === "Back") return { kind: "back", scope };
+	if (!choice || choice === "Back") return { kind: "back", scope, view: "all" };
 	const index = labels.indexOf(choice);
 	const record = records[index];
 	return record
-		? { kind: "selected" as const, recordId: record.id, scope }
-		: { kind: "back", scope };
+		? { kind: "selected" as const, recordId: record.id, scope, view: "all" }
+		: { kind: "back", scope, view: "all" };
 }
 
 function deleteConfirmationMessage(record: RecallMessageRecord): string {

@@ -76,6 +76,8 @@ function recallPickerKeybindings() {
 		matches(data: string, binding: string) {
 			const keys: Record<string, KeyId> = {
 				"app.session.delete": Key.ctrl("d"),
+				"app.tree.filter.cycleForward": Key.ctrl("o"),
+				"app.tree.filter.cycleBackward": Key.ctrlShift("o"),
 				"tui.select.up": Key.up,
 				"tui.select.down": Key.down,
 				"tui.select.pageUp": Key.pageUp,
@@ -90,7 +92,12 @@ function recallPickerKeybindings() {
 			);
 		},
 		getKeys(binding: string) {
-			return binding === "app.session.delete" ? ["ctrl+d"] : [];
+			const keys: Record<string, string[]> = {
+				"app.session.delete": ["ctrl+d"],
+				"app.tree.filter.cycleForward": ["ctrl+o"],
+				"app.tree.filter.cycleBackward": ["ctrl+shift+o"],
+			};
+			return keys[binding] ?? [];
 		},
 	};
 }
@@ -212,7 +219,11 @@ test("TUI query survives picker re-entry in one Recall flow and resets in a fres
 	};
 	const controller = createRecallMenu(data);
 
-	const firstTui = createTuiHarness({ width: 72, rows: 18 });
+	const firstTui = createTuiHarness({
+		width: 72,
+		rows: 18,
+		keybindings: recallPickerKeybindings() as never,
+	});
 	const first = controller.menu.actions.chooseSaved({
 		ctx: { ...base, ui: { ...base.ui, custom: firstTui.custom } } as never,
 		state: await state(controller),
@@ -220,12 +231,21 @@ test("TUI query survives picker re-entry in one Recall flow and resets in a fres
 		itemId: "recall",
 	});
 	await firstTui.waitForOpen();
+	firstTui.send("\u000f");
+	firstTui.send("\u000f");
 	firstTui.type("saved-a");
-	assert.match(stripVTControlCharacters(firstTui.render().join("\n")), /1 match/);
+	assert.match(
+		stripVTControlCharacters(firstTui.render().join("\n")),
+		/View: Assistant only \(1\).*1 match/,
+	);
 	firstTui.press("tui.select.confirm");
 	assert.deepEqual(await first, { kind: "to", screen: "selected" });
 
-	const reopenedTui = createTuiHarness({ width: 72, rows: 18 });
+	const reopenedTui = createTuiHarness({
+		width: 72,
+		rows: 18,
+		keybindings: recallPickerKeybindings() as never,
+	});
 	const reopened = controller.menu.actions.chooseSaved({
 		ctx: { ...base, ui: { ...base.ui, custom: reopenedTui.custom } } as never,
 		state: await state(controller),
@@ -233,15 +253,19 @@ test("TUI query survives picker re-entry in one Recall flow and resets in a fres
 		itemId: "recall",
 	});
 	await reopenedTui.waitForOpen();
-	const reopenedSearch = stripVTControlCharacters(reopenedTui.render().join("\n"))
-		.split("\n")
-		.find((line) => line.startsWith("Search:"));
+	const reopenedFrame = stripVTControlCharacters(reopenedTui.render().join("\n"));
+	const reopenedSearch = reopenedFrame.split("\n").find((line) => line.startsWith("Search:"));
 	assert.match(reopenedSearch ?? "", /saved-a/);
+	assert.match(reopenedFrame, /View: Assistant only \(1\)/);
 	reopenedTui.press("tui.select.cancel");
 	assert.deepEqual(await reopened, { kind: "stay" });
 
 	const fresh = createRecallMenu(data);
-	const freshTui = createTuiHarness({ width: 72, rows: 18 });
+	const freshTui = createTuiHarness({
+		width: 72,
+		rows: 18,
+		keybindings: recallPickerKeybindings() as never,
+	});
 	const freshChoosing = fresh.menu.actions.chooseSaved({
 		ctx: { ...base, ui: { ...base.ui, custom: freshTui.custom } } as never,
 		state: await state(fresh),
@@ -249,10 +273,10 @@ test("TUI query survives picker re-entry in one Recall flow and resets in a fres
 		itemId: "recall",
 	});
 	await freshTui.waitForOpen();
-	const freshSearch = stripVTControlCharacters(freshTui.render().join("\n"))
-		.split("\n")
-		.find((line) => line.startsWith("Search:"));
+	const freshFrame = stripVTControlCharacters(freshTui.render().join("\n"));
+	const freshSearch = freshFrame.split("\n").find((line) => line.startsWith("Search:"));
 	assert.doesNotMatch(freshSearch ?? "", /saved-a/);
+	assert.match(freshFrame, /View: All messages \(1\)/);
 	freshTui.press("tui.select.cancel");
 	assert.deepEqual(await freshChoosing, { kind: "stay" });
 });
@@ -299,6 +323,8 @@ test("TUI direct delete confirms the selected message, shows progress, and resto
 	});
 	await tui.waitForOpen();
 	tui.send("\t");
+	tui.send("\u000f");
+	tui.send("\u000f");
 	tui.press("tui.select.up");
 	tui.type("saved");
 	tui.send("\u0004");
@@ -313,9 +339,9 @@ test("TUI direct delete confirms the selected message, shows progress, and resto
 	}
 	await waitForOpenCount(tui, 3, choosing);
 	const restored = stripVTControlCharacters(tui.render().join("\n"));
-	assert.match(restored, /Scope: All \(1\).*1 match/);
+	assert.match(restored, /Scope: All \(1\).*View: Assistant only \(1\).*1 match/);
 	assert.match(restored, /Search: .*saved/);
-	assert.match(restored, /saved text saved-cur…/);
+	assert.match(restored, /› assistant: saved text saved-current/);
 	assert.equal(
 		data.records.some(({ id }) => id === "saved-other"),
 		false,
@@ -349,12 +375,15 @@ test("cancelling direct delete is side-effect free and restores query and select
 		itemId: "recall",
 	});
 	await tui.waitForOpen();
+	tui.send("\u000f");
+	tui.send("\u000f");
 	tui.type("saved-a");
 	tui.send("\u0004");
 	await waitForOpenCount(tui, 2, choosing);
 	const restored = stripVTControlCharacters(tui.render().join("\n"));
+	assert.match(restored, /View: Assistant only \(1\).*1 match/);
 	assert.match(restored, /Search: .*saved-a/);
-	assert.match(restored, /> assistant .*saved text saved-a/);
+	assert.match(restored, /› assistant: saved text saved-a/);
 	assert.equal(deleteCalls, 0);
 	assert.equal(data.records.length, 1);
 	tui.press("tui.select.cancel");
@@ -386,11 +415,14 @@ test("direct delete failure preserves the record and reports an actionable error
 		itemId: "recall",
 	});
 	await tui.waitForOpen();
+	tui.send("\u000f");
+	tui.send("\u000f");
 	tui.send("\u0004");
 	await waitForOpenCount(tui, 2, choosing);
 	releaseDelete();
 	await waitForOpenCount(tui, 3, choosing);
 	assert.equal(data.records.length, 1);
+	assert.match(tui.render().join("\n"), /View: Assistant only \(1\)/);
 	assert.match(tui.render().join("\n"), /saved text saved-a/);
 	assert.match(mock.notifications.at(-1)?.message ?? "", /Couldn.t delete.*lock unavailable/i);
 	tui.press("tui.select.cancel");

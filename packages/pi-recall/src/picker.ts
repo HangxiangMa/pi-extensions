@@ -10,6 +10,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
+import { formatInteractionHints } from "@narumitw/pi-tui-kit";
 import {
 	filterRecallMessages,
 	messagePreview,
@@ -24,19 +25,35 @@ const SCOPE_LABELS: Record<RecallScope, string> = {
 	cwd: "Current cwd",
 	session: "Current session",
 };
+
+export type RecallView = "all" | "user" | "assistant";
+
+const VIEW_ORDER: readonly RecallView[] = ["all", "user", "assistant"];
+const VIEW_LABELS: Record<RecallView, string> = {
+	all: "All messages",
+	user: "User only",
+	assistant: "Assistant only",
+};
 const MAX_SEARCH_QUERY_LENGTH = 256;
 
 export type ScopedRecallPickerResult =
-	| { kind: "selected"; recordId: string; scope: RecallScope; query?: string }
+	| {
+			kind: "selected";
+			recordId: string;
+			scope: RecallScope;
+			view: RecallView;
+			query?: string;
+	  }
 	| {
 			kind: "delete";
 			recordId: string;
 			nextSelectedId?: string;
 			scope: RecallScope;
+			view: RecallView;
 			query?: string;
 	  }
-	| { kind: "back"; scope: RecallScope; selectedId?: string; query?: string }
-	| { kind: "close"; scope: RecallScope; selectedId?: string; query?: string };
+	| { kind: "back"; scope: RecallScope; view: RecallView; selectedId?: string; query?: string }
+	| { kind: "close"; scope: RecallScope; view: RecallView; selectedId?: string; query?: string };
 
 interface ScopedRecallPickerOptions {
 	tui: TUI;
@@ -45,6 +62,7 @@ interface ScopedRecallPickerOptions {
 	records: readonly RecallMessageRecord[];
 	current: RecallScopeContext;
 	initialScope?: RecallScope;
+	initialView?: RecallView;
 	initialSelectedId?: string;
 	initialQuery?: string;
 	complete: (result: ScopedRecallPickerResult) => void;
@@ -53,6 +71,7 @@ interface ScopedRecallPickerOptions {
 export class ScopedRecallPicker implements Component, Focusable {
 	private readonly searchInput = new Input();
 	private scope: RecallScope;
+	private view: RecallView;
 	private selectedId: string | undefined;
 	private restoreSelectedId: string | undefined;
 	private records: RecallMessageRecord[];
@@ -63,9 +82,10 @@ export class ScopedRecallPicker implements Component, Focusable {
 
 	constructor(private readonly options: ScopedRecallPickerOptions) {
 		this.scope = options.initialScope ?? "cwd";
+		this.view = options.initialView ?? "all";
 		this.searchInput.setValue(replaceTerminalControls(options.initialQuery ?? ""));
 		this.searchInput.focused = false;
-		this.records = this.searchRecords(this.scopedRecords());
+		this.records = this.searchRecords(this.viewRecords(this.scopedRecords()));
 		this.selectedId = this.records.some(({ id }) => id === options.initialSelectedId)
 			? options.initialSelectedId
 			: this.records[0]?.id;
@@ -83,45 +103,60 @@ export class ScopedRecallPicker implements Component, Focusable {
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		const scopedRecords = this.scopedRecords();
+		const viewedRecords = this.viewRecords(scopedRecords);
 		const listHeight = Math.max(1, Math.floor(this.options.tui.terminal.rows) - 8);
 		this.keepSelectionVisible(this.records, listHeight);
 		const visible = this.records.slice(this.scrollOffset, this.scrollOffset + listHeight);
 		const rows = visible.map((record) => {
 			const selected = record.id === this.selectedId;
 			const role = record.role === "assistant" ? "assistant" : "user";
-			const timestamp = new Date(record.source.messageTimestamp).toISOString();
-			const session = record.source.sessionName
-				? ` · ${sanitizeTerminalText(record.source.sessionName)}`
-				: "";
+			const cursor = selected ? this.options.theme.fg("accent", "› ") : "  ";
+			const roleLabel = this.options.theme.fg(
+				role === "assistant" ? "success" : "accent",
+				`${role}: `,
+			);
 			const preview = sanitizeTerminalText(messagePreview(record.text, 72));
-			const line = `${selected ? ">" : " "} ${role} · ${timestamp}${session} · ${preview}`;
-			return selected
-				? this.options.theme.fg("accent", truncateToWidth(line, safeWidth, "…"))
-				: truncateToWidth(line, safeWidth, "…");
+			const session = sanitizeTerminalText(record.source.sessionName ?? "unnamed");
+			const timestamp = new Date(record.source.messageTimestamp).toISOString();
+			let line = truncateToWidth(
+				`${cursor}${roleLabel}${preview} · ${session} · ${timestamp}`,
+				safeWidth,
+				"…",
+			);
+			if (selected) line = this.options.theme.bg("selectedBg", this.options.theme.bold(line));
+			return line;
 		});
 		const query = this.query();
 		const activeQuery = query.trim().length > 0;
 		const matchCount = activeQuery
 			? ` · ${this.records.length} ${this.records.length === 1 ? "match" : "matches"}`
 			: "";
-		const scopeLine = `Scope: ${SCOPE_LABELS[this.scope]} (${scopedRecords.length})${matchCount} · Tab change scope`;
+		const scopeLine = `Scope: ${SCOPE_LABELS[this.scope]} (${scopedRecords.length}) · View: ${VIEW_LABELS[this.view]} (${viewedRecords.length})${matchCount} · Tab change scope`;
 		const searchLabel = this.options.theme.fg("muted", "Search: ");
 		const searchWidth = Math.max(1, safeWidth - visibleWidth(searchLabel));
 		const searchLine = `${searchLabel}${this.searchInput.render(searchWidth)[0] ?? ""}`;
+		const selectedIndex = this.records.findIndex(({ id }) => id === this.selectedId);
+		const position = selectedIndex >= 0 ? selectedIndex + 1 : 0;
+		const statusLine = this.options.theme.fg(
+			"muted",
+			`  (${position}/${this.records.length}) [${this.view}]`,
+		);
 		const emptyRows =
 			scopedRecords.length === 0
 				? [this.options.theme.fg("dim", "  No saved messages in this scope")]
-				: [
-						...(this.queryTooLong()
-							? [
-									this.options.theme.fg(
-										"error",
-										`  Search query is too long (maximum ${MAX_SEARCH_QUERY_LENGTH} characters)`,
-									),
-								]
-							: []),
-						this.options.theme.fg("dim", "  No matching saved messages"),
-					];
+				: viewedRecords.length === 0
+					? [this.options.theme.fg("dim", `  No ${this.view} messages in this scope`)]
+					: [
+							...(this.queryTooLong()
+								? [
+										this.options.theme.fg(
+											"error",
+											`  Search query is too long (maximum ${MAX_SEARCH_QUERY_LENGTH} characters)`,
+										),
+									]
+								: []),
+							this.options.theme.fg("dim", "  No matching saved messages"),
+						];
 		return [
 			truncateToWidth(
 				this.options.theme.fg("accent", this.options.theme.bold("Pi Recall")),
@@ -132,6 +167,7 @@ export class ScopedRecallPicker implements Component, Focusable {
 			truncateToWidth(searchLine, safeWidth, ""),
 			"",
 			...(rows.length > 0 ? rows : emptyRows),
+			truncateToWidth(statusLine, safeWidth, ""),
 			...this.footerLines(safeWidth),
 		].map((line) => truncateToWidth(line, safeWidth, ""));
 	}
@@ -142,6 +178,7 @@ export class ScopedRecallPicker implements Component, Focusable {
 			this.finish({
 				kind: "close",
 				scope: this.scope,
+				view: this.view,
 				selectedId: this.selectedId,
 				query: this.query(),
 			});
@@ -155,10 +192,15 @@ export class ScopedRecallPicker implements Component, Focusable {
 			this.cycleScope(-1);
 		} else if (matchesKey(data, Key.tab)) {
 			this.cycleScope(1);
+		} else if (this.options.keybindings.matches(data, "app.tree.filter.cycleBackward")) {
+			this.cycleView(-1);
+		} else if (this.options.keybindings.matches(data, "app.tree.filter.cycleForward")) {
+			this.cycleView(1);
 		} else if (this.options.keybindings.matches(data, "tui.select.cancel")) {
 			this.finish({
 				kind: "back",
 				scope: this.scope,
+				view: this.view,
 				selectedId: this.selectedId,
 				query: this.query(),
 			});
@@ -181,6 +223,7 @@ export class ScopedRecallPicker implements Component, Focusable {
 					kind: "selected",
 					recordId: this.selectedId,
 					scope: this.scope,
+					view: this.view,
 					query: this.query(),
 				});
 				return;
@@ -209,6 +252,10 @@ export class ScopedRecallPicker implements Component, Focusable {
 		return filterRecallMessages(this.options.records, this.scope, this.options.current).reverse();
 	}
 
+	private viewRecords(records: readonly RecallMessageRecord[]): RecallMessageRecord[] {
+		return this.view === "all" ? [...records] : records.filter(({ role }) => role === this.view);
+	}
+
 	private searchRecords(records: readonly RecallMessageRecord[]): RecallMessageRecord[] {
 		const query = this.query();
 		if (this.queryTooLong()) return [];
@@ -218,7 +265,7 @@ export class ScopedRecallPicker implements Component, Focusable {
 
 	private applySearch(): void {
 		const previouslySelectedId = this.selectedId;
-		this.records = this.searchRecords(this.scopedRecords());
+		this.records = this.searchRecords(this.viewRecords(this.scopedRecords()));
 		const restoreIndex = this.records.findIndex(({ id }) => id === this.restoreSelectedId);
 		const previousIndex = this.records.findIndex(({ id }) => id === previouslySelectedId);
 		if (restoreIndex >= 0) {
@@ -236,10 +283,21 @@ export class ScopedRecallPicker implements Component, Focusable {
 	private cycleScope(delta: number): void {
 		const index = SCOPE_ORDER.indexOf(this.scope);
 		this.scope = SCOPE_ORDER[(index + delta + SCOPE_ORDER.length) % SCOPE_ORDER.length] ?? "cwd";
-		this.records = this.searchRecords(this.scopedRecords());
+		this.refilterAfterModeChange();
+	}
+
+	private cycleView(delta: number): void {
+		const index = VIEW_ORDER.indexOf(this.view);
+		this.view = VIEW_ORDER[(index + delta + VIEW_ORDER.length) % VIEW_ORDER.length] ?? "all";
+		this.refilterAfterModeChange();
+	}
+
+	private refilterAfterModeChange(): void {
+		this.records = this.searchRecords(this.viewRecords(this.scopedRecords()));
 		if (!this.records.some(({ id }) => id === this.selectedId)) {
 			this.selectedId = this.records[0]?.id;
 		}
+		this.restoreSelectedId = undefined;
 		this.scrollOffset = 0;
 	}
 
@@ -254,20 +312,41 @@ export class ScopedRecallPicker implements Component, Focusable {
 			recordId: this.selectedId,
 			...(nextSelectedId ? { nextSelectedId } : {}),
 			scope: this.scope,
+			view: this.view,
 			query: this.query(),
 		});
 	}
 
 	private footerLines(width: number): string[] {
-		const deleteKey = this.options.keybindings.getKeys("app.session.delete")[0];
-		const deleteHint = deleteKey ? `${deleteKey} delete` : "";
-		const primary = [deleteHint, "Enter open", "↑↓ navigate"].filter(Boolean).join(" · ");
-		const navigation = "Tab/Shift+Tab scope · Esc back · Ctrl+C close";
-		if (width < 32) {
-			return [this.options.theme.fg("dim", primary), this.options.theme.fg("dim", navigation)];
-		}
+		const primary = formatInteractionHints(
+			this.options.keybindings,
+			[
+				{ bindings: ["app.session.delete"], label: "delete" },
+				{ bindings: ["tui.select.confirm"], label: "open" },
+				{ bindings: ["tui.select.up", "tui.select.down"], label: "navigate" },
+			],
+			{ separator: "·" },
+		);
+		const navigation = formatInteractionHints(
+			this.options.keybindings,
+			[
+				{
+					bindings: ["app.tree.filter.cycleForward", "app.tree.filter.cycleBackward"],
+					label: "view",
+				},
+				{ keys: ["tab", "shift+tab"], label: "scope" },
+				{
+					bindings: ["tui.select.cancel"],
+					excludeKeys: ["ctrl+c"],
+					label: "back",
+				},
+				{ keys: ["ctrl+c"], label: "close" },
+			],
+			{ separator: "·" },
+		);
+		const searchPrefix = width < 32 ? "" : "Type to search · ";
 		return [
-			this.options.theme.fg("dim", `Type to search · ${primary}`),
+			this.options.theme.fg("dim", `${searchPrefix}${primary}`),
 			this.options.theme.fg("dim", navigation),
 		];
 	}
@@ -332,7 +411,12 @@ function searchRecordText(record: RecallMessageRecord): string {
 function replaceTerminalControls(value: string): string {
 	return Array.from(value, (character) => {
 		const codePoint = character.codePointAt(0) ?? 0;
-		return codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ? " " : character;
+		return codePoint <= 0x1f ||
+			(codePoint >= 0x7f && codePoint <= 0x9f) ||
+			isLineSeparator(codePoint) ||
+			isBidiControl(codePoint)
+			? " "
+			: character;
 	}).join("");
 }
 
@@ -366,8 +450,23 @@ export function sanitizeTerminalText(value: string): string {
 			}
 			continue;
 		}
-		if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) safe += " ";
+		if (isBidiControl(code)) continue;
+		if (isLineSeparator(code) || code <= 0x1f || (code >= 0x7f && code <= 0x9f)) safe += " ";
 		else safe += value[index];
 	}
 	return safe.replace(/\s+/gu, " ").trim();
+}
+
+function isLineSeparator(codePoint: number): boolean {
+	return codePoint === 0x2028 || codePoint === 0x2029;
+}
+
+function isBidiControl(codePoint: number): boolean {
+	return (
+		codePoint === 0x061c ||
+		codePoint === 0x200e ||
+		codePoint === 0x200f ||
+		(codePoint >= 0x202a && codePoint <= 0x202e) ||
+		(codePoint >= 0x2066 && codePoint <= 0x2069)
+	);
 }
