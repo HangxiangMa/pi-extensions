@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import { createMockContext, createMockPi } from "../../../test/support.js";
 import { registerStatefulSubagents } from "../src/stateful.js";
 import type { WorkspaceManager } from "../src/workspace.js";
@@ -207,6 +207,7 @@ test("stale idempotent spawn cleanup cannot delete a replacement session attempt
 });
 
 test("stateful completion delivery routes nested results to the direct parent without root duplication", async () => {
+	vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 	const root = mkdtempSync(path.join(os.tmpdir(), "pi-subagents-parent-completion-"));
 	const agentDir = path.join(root, "agent-home");
 	mkdirSync(agentDir);
@@ -240,8 +241,6 @@ test("stateful completion delivery routes nested results to the direct parent wi
 		while (controller.listAgents()[0]?.state === "running") {
 			await new Promise<void>((resolve) => setImmediate(resolve));
 		}
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		const rootCompletionCount = mock.sentMessages.length;
 		const child = await spawn.execute(
 			"child",
 			{
@@ -260,8 +259,25 @@ test("stateful completion delivery routes nested results to the direct parent wi
 		) {
 			await new Promise<void>((resolve) => setImmediate(resolve));
 		}
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		assert.equal(mock.sentMessages.length, rootCompletionCount);
+		const manage = mock.tools.find((tool) => tool.name === "subagent_manage") as {
+			execute: (...args: unknown[]) => Promise<unknown>;
+		};
+		await manage.execute(
+			"close-child",
+			{ action: "close", agentId: child.details.agent.taskPath },
+			undefined,
+			undefined,
+			context.ctx,
+		);
+		await vi.runOnlyPendingTimersAsync();
+		assert.equal(
+			mock.sentMessages.some(({ message }) =>
+				String((message as { content?: unknown }).content ?? "").includes(
+					`Agent ID: ${child.details.agent.id}`,
+				),
+			),
+			false,
+		);
 		const retainedParent = controller
 			.listAgents()
 			.find((agent) => agent.id === parent.details.agent.id);
@@ -272,6 +288,7 @@ test("stateful completion delivery routes nested results to the direct parent wi
 		assert.match(nestedMessage?.content ?? "", /done:child/);
 		await mock.events.get("session_shutdown")?.[0]?.({}, context.ctx);
 	} finally {
+		vi.useRealTimers();
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
 		rmSync(root, { recursive: true, force: true });
