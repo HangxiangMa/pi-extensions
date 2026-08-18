@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.56.0
+
+### Minor Changes
+
+- 8bead31: Expose lightweight terminal-text and interaction-hints subpaths without loading the full Kit runtime.
+
 ## 0.55.0
 
 ### Minor Changes
