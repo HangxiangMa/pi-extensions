@@ -201,6 +201,7 @@ export function createLangfuseExtension(
 				activeConfig = result.config;
 				recorder = new TraceRecorder(backend, {
 					sessionId: ctx.sessionManager.getSessionId(),
+					...(result.config.userId ? { userId: result.config.userId } : {}),
 					cwd: ctx.cwd,
 					mode: ctx.mode,
 					captureContent: result.config.captureContent,

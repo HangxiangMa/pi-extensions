@@ -12,6 +12,7 @@ export interface LangfuseConfig {
 	baseUrl: string;
 	environment?: string;
 	release?: string;
+	userId?: string;
 	captureContent: boolean;
 }
 
@@ -61,6 +62,7 @@ async function writeLangfuseConfigNow(
 		baseUrl: _baseUrl,
 		environment: _environment,
 		release: _release,
+		userId: _userId,
 		captureContent: _captureContent,
 		...unknownFields
 	} = currentDocument;
@@ -209,6 +211,11 @@ export function normalizeLangfuseConfig(
 	}
 	const release = optionalString(input.release, "release");
 	if (!release.ok) return release;
+	const userId = optionalString(input.userId, "userId");
+	if (!userId.ok) return userId;
+	if (userId.value && userId.value.length > 200) {
+		return { ok: false, reason: "pi-langfuse.json userId must be at most 200 characters." };
+	}
 
 	return {
 		ok: true,
@@ -218,6 +225,7 @@ export function normalizeLangfuseConfig(
 			baseUrl,
 			...(environment.value ? { environment: environment.value } : {}),
 			...(release.value ? { release: release.value } : {}),
+			...(userId.value ? { userId: userId.value } : {}),
 			captureContent: input.captureContent ?? true,
 		},
 	};

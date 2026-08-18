@@ -39,14 +39,15 @@ class ProductionObservation implements Observation {
 	constructor(readonly native: LangfuseObservation) {}
 
 	update(attributes: ObservationAttributes): Observation {
-		const { sessionId, ...observationAttributes } = attributes;
+		const { sessionId, userId, ...observationAttributes } = attributes;
 		this.native.updateOtelSpanAttributes(observationAttributes as LangfuseObservationAttributes);
 		applySessionId(this.native, sessionId);
+		applyUserId(this.native, userId);
 		return this;
 	}
 
 	updateTrace(attributes: ObservationAttributes): Observation {
-		const { input, output, metadata, name, sessionId, tags, version } = attributes;
+		const { input, output, metadata, name, sessionId, userId, tags, version } = attributes;
 		if (input !== undefined || output !== undefined) {
 			this.native.setTraceIO({ input, output });
 		}
@@ -54,6 +55,7 @@ class ProductionObservation implements Observation {
 			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_NAME, name);
 		}
 		applySessionId(this.native, sessionId);
+		applyUserId(this.native, userId);
 		if (tags !== undefined) {
 			this.native.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_TAGS, tags);
 		}
@@ -86,13 +88,14 @@ class ProductionTraceBackend implements TraceBackend {
 		attributes: ObservationAttributes,
 		options: { asType: ObservationType; parent?: Observation },
 	): Observation {
-		const { sessionId, ...observationAttributes } = attributes;
+		const { sessionId, userId, ...observationAttributes } = attributes;
 		const parent = options.parent;
 		const native =
 			parent instanceof ProductionObservation
 				? startChild(parent.native, name, observationAttributes, options.asType)
 				: startRoot(name, observationAttributes, options.asType);
 		applySessionId(native, sessionId);
+		applyUserId(native, userId);
 		return new ProductionObservation(native);
 	}
 
@@ -183,6 +186,12 @@ const defaultFactories: RuntimeFactories = {
 function applySessionId(observation: LangfuseObservation, sessionId: string | undefined): void {
 	if (sessionId !== undefined) {
 		observation.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, sessionId);
+	}
+}
+
+function applyUserId(observation: LangfuseObservation, userId: string | undefined): void {
+	if (userId !== undefined) {
+		observation.otelSpan.setAttribute(LangfuseOtelSpanAttributes.TRACE_USER_ID, userId);
 	}
 }
 

@@ -214,6 +214,47 @@ test("configuration covers malformed JSON, normalization, and captureContent fal
 		if (!normalized.ok) assert.match(normalized.reason, /environment/i);
 	}
 
+	assert.deepEqual(
+		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", userId: "  analyst-7  " }),
+		{
+			ok: true,
+			config: {
+				publicKey: "pk",
+				secretKey: "sk",
+				baseUrl: "https://us.cloud.langfuse.com",
+				userId: "analyst-7",
+				captureContent: true,
+			},
+		},
+	);
+	for (const userId of ["", "   ", 7, null]) {
+		const normalized = normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", userId });
+		assert.equal(normalized.ok, false, String(userId));
+		if (!normalized.ok) assert.match(normalized.reason, /userId/i);
+	}
+	const maxLengthUserId = "u".repeat(200);
+	assert.deepEqual(
+		normalizeLangfuseConfig({ publicKey: "pk", secretKey: "sk", userId: maxLengthUserId }),
+		{
+			ok: true,
+			config: {
+				publicKey: "pk",
+				secretKey: "sk",
+				baseUrl: "https://us.cloud.langfuse.com",
+				userId: maxLengthUserId,
+				captureContent: true,
+			},
+		},
+	);
+	const tooLongUserId = normalizeLangfuseConfig({
+		publicKey: "pk",
+		secretKey: "sk",
+		userId: "u".repeat(201),
+	});
+	assert.equal(tooLongUserId.ok, false);
+	if (!tooLongUserId.ok)
+		assert.match(tooLongUserId.reason, /userId must be at most 200 characters/);
+
 	await writeFile(path, JSON.stringify({ publicKey: "pk", secretKey: "sk" }), { mode: 0o600 });
 	await chmod(path, 0o644);
 	const repaired = await loadLangfuseConfig(path);
