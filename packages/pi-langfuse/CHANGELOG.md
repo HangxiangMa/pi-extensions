@@ -1,5 +1,16 @@
 # @narumitw/pi-langfuse
 
+## 0.50.0
+
+### Minor Changes
+
+- 1086433: Add an optional `userId` setting to `pi-langfuse.json` and stamp it on every observation so Langfuse attributes traces and sessions to a user.
+
+### Patch Changes
+
+- Updated dependencies [3176172]
+  - @narumitw/pi-tui-kit@0.55.0
+
 ## 0.49.4
 
 ### Patch Changes
