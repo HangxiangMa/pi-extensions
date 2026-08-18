@@ -1,5 +1,11 @@
 # @narumitw/pi-recall
 
+## 0.50.2
+
+### Patch Changes
+
+- 5f0ccd3: Load lightweight Pi TUI Kit helpers without evaluating the full menu runtime during extension startup.
+
 ## 0.50.1
 
 ### Patch Changes
