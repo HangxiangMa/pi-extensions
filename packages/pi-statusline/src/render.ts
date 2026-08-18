@@ -5,7 +5,7 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { formatDirectoryPath } from "./directory.js";
 import {
 	type ExtensionStatusRuntime,
