@@ -25,6 +25,14 @@
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
+		"./interaction-hints": {
+			"types": "./dist/interaction-hints.d.ts",
+			"import": "./dist/interaction-hints.js"
+		},
+		"./terminal-text": {
+			"types": "./dist/terminal-text.d.ts",
+			"import": "./dist/terminal-text.js"
+		},
 		"./testing": {
 			"types": "./dist/testing/index.d.ts",
 			"import": "./dist/testing/index.js"

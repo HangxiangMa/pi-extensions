@@ -22,6 +22,11 @@ npm install @narumitw/pi-tui-kit
 The published package contains built ESM and declarations in `dist/`; consumers do not need a
 TypeScript loader for dependencies.
 
+The package root remains the supported entrypoint for menus and interaction runners.
+Import lightweight display helpers from `@narumitw/pi-tui-kit/terminal-text` or
+`@narumitw/pi-tui-kit/interaction-hints` when a startup path does not otherwise need the full Kit
+runtime.
+
 ### Compatibility floor
 
 Pi TUI Kit is still a zero-major package, so caret ranges are minor-bounded: for example,
@@ -45,16 +50,19 @@ and keybindings supplied by the active UI callback; review syntax coloring uses 
 highlighter dependency and the same callback theme. Mermaid rendering lazy-loads its declared
 renderer only before the first screen containing an enabled Mermaid fence.
 
-Repository maintainers can measure cold package import plus first actions, code-review, Mermaid, and
-task frames in fresh serial processes:
+The `terminal-text` and `interaction-hints` subpaths expose only their focused ESM and declaration
+graphs, while the package root keeps every existing export for compatibility.
+
+Repository maintainers can measure cold root and lightweight-subpath imports plus first actions,
+code-review, Mermaid, and task frames in fresh serial processes:
 
 ```bash
 npm run build --workspace @narumitw/pi-tui-kit
 node scripts/benchmark-tui-kit-runtime.mjs --runs 5
 ```
 
-The benchmark reports medians, median absolute deviations, and resolved package URLs so a fast import
-cannot hide the same dependency cost in the first interaction.
+The benchmark reports medians, median absolute deviations, resolved package URLs, and graph-presence
+flags so a fast import cannot hide the same dependency cost in the first interaction.
 
 ## 🚀 Example
 
@@ -256,7 +264,7 @@ Enter/Escape names, sanitizes controls, applies exclusions, de-duplicates keys, 
 separator.
 
 ```ts
-import { formatInteractionHints } from "@narumitw/pi-tui-kit";
+import { formatInteractionHints } from "@narumitw/pi-tui-kit/interaction-hints";
 
 const hint = formatInteractionHints(keybindings, [
   { bindings: ["tui.select.up", "tui.select.down"], label: "preview" },
@@ -278,7 +286,7 @@ The result is for display only.
 Keep raw paths, IDs, URLs, settings, and action payloads separate, then use Pi TUI's cell-aware wrapping or truncation for layout.
 
 ```ts
-import { sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
 const label = truncateToWidth(sanitizeTerminalText(rawModelId), width, "");
@@ -726,8 +734,11 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `runLiveChoice()` — adapts a live-preview choice to TUI and ordinary RPC selection while preserving
   typed selection, confirmation-only gating, shortcuts, Back, Close, Stale, Unsupported, and Error.
 - `formatInteractionHints()` — formats sanitized, normalized, de-duplicated injected bindings and
-  literal shortcut keys for specialized interaction hints.
-- `sanitizeTerminalText()` — removes terminal and bidirectional display controls from untrusted single-line presentation text without mutating raw payloads.
+  literal shortcut keys for specialized interaction hints; the lightweight
+  `@narumitw/pi-tui-kit/interaction-hints` subpath exports it and its public types.
+- `sanitizeTerminalText()` — removes terminal and bidirectional display controls from untrusted
+  single-line presentation text without mutating raw payloads; the lightweight
+  `@narumitw/pi-tui-kit/terminal-text` subpath exports it.
 - `runCustomInteraction()` — owns cancellation, stale checks, exactly-once disposal, optional pending
   work draining, and typed results around one extension-owned custom TUI component.
 - `resolveMenuScreen()` — resolves and validates a dynamic screen for tests or adapters.
@@ -752,7 +763,10 @@ Consumer fixtures continue to own domain state, persistence, generation checks, 
 - `src/task.ts` — standalone and menu-shared task lifecycle orchestration
 - `src/confirmation.ts` — standalone confirmation mode adaptation and lifecycle results
 - `src/live-choice.ts` — standalone live-choice TUI/RPC adaptation and preview-work ownership
-- `src/interaction-hints.ts` — injected-key and literal-shortcut hint formatting
+- `src/interaction-hints.ts` — injected-key and literal-shortcut hint formatting, published through
+  the lightweight `/interaction-hints` subpath
+- `src/terminal-text.ts` — terminal display sanitization published through the lightweight
+  `/terminal-text` subpath
 - `src/custom-interaction.ts` — lifecycle ownership for specialized public custom components
 - `dist/` — generated ESM and declarations included in the npm package
 - `test/` — contract, renderer, navigation, lifecycle, and public testing-entrypoint coverage
