@@ -1,5 +1,5 @@
 import { basename, isAbsolute, relative, sep } from "node:path";
-import { sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import {
 	graphemes,
 	toSlashPath,

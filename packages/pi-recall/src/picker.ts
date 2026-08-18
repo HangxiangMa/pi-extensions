@@ -10,7 +10,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { formatInteractionHints } from "@narumitw/pi-tui-kit";
+import { formatInteractionHints } from "@narumitw/pi-tui-kit/interaction-hints";
 import {
 	filterRecallMessages,
 	messagePreview,
