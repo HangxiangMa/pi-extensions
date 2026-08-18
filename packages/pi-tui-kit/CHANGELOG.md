@@ -1,5 +1,11 @@
 # @narumitw/pi-tui-kit
 
+## 0.55.0
+
+### Minor Changes
+
+- 3176172: Add opt-in Markdown document rendering with terminal-friendly LaTeX and lazy, width-safe Unicode Mermaid diagrams.
+
 ## 0.54.1
 
 ### Patch Changes
