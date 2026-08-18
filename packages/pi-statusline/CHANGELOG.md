@@ -1,5 +1,12 @@
 # @narumitw/pi-statusline
 
+## 0.49.9
+
+### Patch Changes
+
+- Updated dependencies [8bead31]
+  - @narumitw/pi-tui-kit@0.56.0
+
 ## 0.49.8
 
 ### Patch Changes

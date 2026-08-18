@@ -1,5 +1,12 @@
 # @narumitw/pi-subagents
 
+## 2.0.1
+
+### Patch Changes
+
+- Updated dependencies [8bead31]
+  - @narumitw/pi-tui-kit@0.56.0
+
 ## 2.0.0
 
 ### Major Changes
