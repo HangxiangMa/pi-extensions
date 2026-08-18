@@ -15,8 +15,9 @@ Execute and complete the specified plan end to end.
 6. Review the complete diff for correctness, security, lifecycle safety, compatibility, regressions, and unnecessary changes.
 7. When code is affected, harden plausible edge cases and failure paths, add regression coverage for any fixes, and rerun affected checks.
 8. Audit the finished work against every plan requirement and completion criterion.
-9. Stage only the intended files, create focused signed commits that follow repository conventions, and push the branch.
-10. Open a pull request with a concise summary, verification evidence, relevant risks or unverified paths, and a link to the completed plan.
+9. After every required checkbox has passed, delete the completed plan file; keep any incomplete plan and its unchecked evidence.
+10. Stage only the intended files, create focused signed commits that follow repository conventions, and push the branch.
+11. Open a pull request with a concise summary, verification evidence, and relevant risks or unverified paths.
 
 Do not discard user changes, conceal failing checks, or claim completion without evidence.
 Do not publish packages, create version tags, or dispatch release workflows.
