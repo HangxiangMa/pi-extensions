@@ -1,5 +1,11 @@
 # @narumitw/pi-statusline
 
+## 0.49.10
+
+### Patch Changes
+
+- 5f0ccd3: Load lightweight Pi TUI Kit helpers without evaluating the full menu runtime during extension startup.
+
 ## 0.49.9
 
 ### Patch Changes

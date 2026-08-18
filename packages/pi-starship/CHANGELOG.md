@@ -1,5 +1,11 @@
 # @narumitw/pi-starship
 
+## 0.51.4
+
+### Patch Changes
+
+- 5f0ccd3: Load lightweight Pi TUI Kit helpers without evaluating the full menu runtime during extension startup.
+
 ## 0.51.3
 
 ### Patch Changes
