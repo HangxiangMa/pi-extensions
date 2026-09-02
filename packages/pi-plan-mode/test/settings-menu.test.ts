@@ -18,6 +18,7 @@ async function withSettingsMenu(
 		notifications: ReturnType<typeof createMockContext>["notifications"];
 		saved: PlanModeSettings[];
 	}) => Promise<void>,
+	contextOverrides: Record<string, unknown> = {},
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "pi-plan-mode-settings-menu-"));
 	const settingsPath = join(directory, "pi-plan-mode.json");
@@ -27,6 +28,7 @@ async function withSettingsMenu(
 		mode: "tui",
 		hasUI: true,
 		custom: tui.custom,
+		...contextOverrides,
 	});
 	const saved: PlanModeSettings[] = [];
 	try {
@@ -138,6 +140,75 @@ test("Default tools distinguish automatic, explicit empty, user risk, blocked ro
 			Object.hasOwn(JSON.parse(await readFile(settingsPath, "utf8")), "defaultPlanTools"),
 			false,
 		);
+		tui.press("ctrl+c");
+		await running;
+	});
+});
+
+const DEFERRED_CAPABLE_MODEL = {
+	api: "anthropic-messages",
+	provider: "anthropic",
+	id: "claude-sonnet-4-5",
+	compat: { supportsToolReferences: true },
+};
+
+test("Default tools screen makes a deferred-capable, registered-but-inactive tool selectable", async () => {
+	await withSettingsMenu(
+		async ({ settingsPath, tui, ctx, saved }) => {
+			const running = showPlanModeSettings(
+				ctx,
+				menuOptions(settingsPath, saved, { activeToolNames: ["read"] }),
+			);
+			await tui.waitForOpen();
+			tui.press("tui.select.down");
+			tui.press("tui.select.confirm");
+			await tui.waitForPending();
+			await tui.waitForOpen();
+			tui.press("tui.select.down");
+			tui.press("tui.select.down");
+			const frame = tui.render().join("\n");
+			assert.match(frame, /›\s+\[ \] custom/u);
+			assert.match(frame, /will be deferred-activated on first use/u);
+			assert.doesNotMatch(frame, /custom.*\(unavailable\)/is);
+
+			tui.press("tui.select.confirm");
+			await tui.waitForPending();
+			await tui.waitForOpen();
+			assert.deepEqual(saved.at(-1)?.defaultPlanTools, ["read", "custom"]);
+			assert.deepEqual(
+				(JSON.parse(await readFile(settingsPath, "utf8")) as { defaultPlanTools: string[] })
+					.defaultPlanTools,
+				["read", "custom"],
+			);
+
+			tui.press("ctrl+c");
+			await running;
+		},
+		{ model: DEFERRED_CAPABLE_MODEL },
+	);
+});
+
+test("without deferred-tool-loading support the tools screen keeps a registered-but-inactive tool unselectable", async () => {
+	await withSettingsMenu(async ({ settingsPath, tui, ctx, saved }) => {
+		const running = showPlanModeSettings(
+			ctx,
+			menuOptions(settingsPath, saved, { activeToolNames: ["read"] }),
+		);
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.confirm");
+		await tui.waitForPending();
+		await tui.waitForOpen();
+		tui.press("tui.select.down");
+		tui.press("tui.select.down");
+		const frame = tui.render().join("\n");
+		assert.match(frame, /›\s+\[-\] custom \(unavailable\)/u);
+		assert.match(frame, /not active in this Pi session/u);
+
+		tui.press("tui.select.confirm");
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		assert.equal(saved.length, 0);
+
 		tui.press("ctrl+c");
 		await running;
 	});
