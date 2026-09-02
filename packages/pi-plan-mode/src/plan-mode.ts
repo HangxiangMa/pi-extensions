@@ -1118,6 +1118,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 		const tools = selectableTools();
 		const activeToolNames = new Set(safeGetActiveTools());
+		const deferredCapable = supportsNativeDeferredToolLoading(currentSessionContext?.model);
 		const initialSelectedNames = snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot());
 		const retainsInactiveSelection =
 			state.selectedToolNames !== undefined ||
@@ -1169,20 +1170,22 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 						? toolPolicyLabel(tool)
 						: retained
 							? "not active yet; retained for first-request resolution"
-							: "not active in this Pi session";
+							: deferredCapable
+								? "not active yet; will be deferred-activated on first use"
+								: "not active in this Pi session";
 					const description = tool.description ?? "No description available";
 					return {
 						name: tool.name,
 						description: `${policy} · ${description}`,
 						searchText: [policy, description].join(" "),
-						disabled: !selectable || !active,
-						disabledReason: !active
-							? retained
-								? "Not active yet; retained and resolved before the first request"
-								: "Not active in Pi; Plan mode will not activate it"
-							: selectable
+						disabled: !selectable || (!active && !deferredCapable),
+						disabledReason: !selectable
+							? "Blocked by Plan-mode policy"
+							: active || deferredCapable
 								? undefined
-								: "Blocked by Plan-mode policy",
+								: retained
+									? "Not active yet; retained and resolved before the first request"
+									: "Not active in Pi; Plan mode will not activate it",
 					};
 				}),
 				...pendingNames.map((name) => {
@@ -1213,15 +1216,48 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 				if (signal.aborted || !lifecycle.isCurrent()) return;
 				const selectedToolNames = Array.from(
 					new Set(
-						names.filter((name) => activeToolNames.has(name) || retainedInactiveNames.has(name)),
+						names.filter(
+							(name) =>
+								activeToolNames.has(name) ||
+								retainedInactiveNames.has(name) ||
+								(deferredCapable && registeredNames.has(name)),
+						),
 					),
 				);
+				cacheDefaultPlanTools(selectedToolNames);
 				if (enterPlanMode(ctx, { selectedToolNames, selectedToolKeys: undefined })) {
 					ctx.ui.notify("Plan mode enabled with the selected tools.", "info");
 				}
 			},
 			settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
 		});
+	}
+
+	// Best-effort cache of the launch menu's explicit tool selection as the new cross-session
+	// default, so the next /plan does not require re-picking the same tools. Skips an empty
+	// selection (that would silently blow away an existing, meaningful default) and skips writing
+	// when the selection already matches the persisted default.
+	//
+	// Deliberately not tied to the launch menu's own AbortSignal: that signal aborts with reason
+	// "Menu closed" the instant the menu resolves normally (i.e. right after this call), which
+	// would cancel the write before it ever reaches disk. The write is still safe to fire without
+	// a signal — enqueueMutation/awaitPlanModeSettingsWrites already make readers and dispose()
+	// wait for any in-flight write on this settingsPath.
+	function cacheDefaultPlanTools(names: readonly string[]) {
+		if (names.length === 0) return;
+		const current = [...(settings.defaultPlanTools ?? [])].sort();
+		const next = [...new Set(names)].sort();
+		if (current.length === next.length && current.every((name, index) => name === next[index])) {
+			return;
+		}
+		const updateSettings = dependencies.updateSettings ?? updatePlanModeSettings;
+		void updateSettings({ defaultPlanTools: next }, { settingsPath: dependencies.settingsPath })
+			.then((saved) => {
+				settings = saved;
+			})
+			.catch(() => {
+				// A failed write just means the next launch re-shows the picker; not worth surfacing.
+			});
 	}
 
 	async function showActivePlanMenu(ctx: ExtensionContext) {

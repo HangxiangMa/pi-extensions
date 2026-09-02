@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -211,6 +211,59 @@ test("Plan Settings uses live active tools registered after session start", asyn
 	assert.match(frame, /late_tool/u);
 	assert.match(frame, /user opt-in/u);
 	assert.doesNotMatch(frame, /late_tool.*not active/is);
+
+	tui.press("ctrl+c");
+	await running;
+	tui.dispose();
+});
+
+const DEFERRED_CAPABLE_MODEL = {
+	api: "anthropic-messages",
+	provider: "anthropic",
+	id: "claude-sonnet-4-5",
+	compat: { supportsToolReferences: true },
+};
+
+test("the tools screen makes a deferred-capable, registered-but-inactive tool selectable", async () => {
+	const allTools = [builtinTool("read"), extensionTool("custom")];
+	const mock = createMockPi({ activeTools: ["read"], allTools });
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const tui = createTuiHarness();
+	const context = createMockContext({
+		mode: "tui",
+		hasUI: true,
+		custom: tui.custom,
+		model: DEFERRED_CAPABLE_MODEL,
+	});
+	await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+
+	const running = mock.commands.get("plan")?.handler("tools", context.ctx) as Promise<unknown>;
+	await waitForOpenCount(tui, 1, running);
+	tui.press("tui.select.down");
+	const frame = tui.render().join("\n");
+	assert.match(frame, /custom/u);
+	assert.match(frame, /will be deferred-activated on first use/u);
+	assert.doesNotMatch(frame, /custom.*\(unavailable\)/is);
+
+	tui.press("ctrl+c");
+	await running;
+	tui.dispose();
+});
+
+test("without deferred-tool-loading support the tools screen keeps a registered-but-inactive tool unselectable", async () => {
+	const allTools = [builtinTool("read"), extensionTool("custom")];
+	const mock = createMockPi({ activeTools: ["read"], allTools });
+	planMode(mock.pi, { readSettings: async () => ({ kind: "missing" as const }) });
+	const tui = createTuiHarness();
+	const context = createMockContext({ mode: "tui", hasUI: true, custom: tui.custom });
+	await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+
+	const running = mock.commands.get("plan")?.handler("tools", context.ctx) as Promise<unknown>;
+	await waitForOpenCount(tui, 1, running);
+	tui.press("tui.select.down");
+	const frame = tui.render().join("\n");
+	assert.match(frame, /custom.*\(unavailable\)/is);
+	assert.match(frame, /not active in this Pi session/u);
 
 	tui.press("ctrl+c");
 	await running;
@@ -616,4 +669,76 @@ test("start is completed while longer start text remains an inline prompt", asyn
 
 	await mock.commands.get("plan")?.handler("start a migration", context.ctx);
 	assert.equal(mock.sentUserMessages.at(-1)?.text, "start a migration");
+});
+
+test("starting with an explicit tool selection auto-caches it as the new default", async () => {
+	const agentDir = await mkdtemp(join(tmpdir(), "pi-plan-mode-launch-autocache-"));
+	const settingsPath = join(agentDir, "pi-plan-mode.json");
+	try {
+		const allTools = [builtinTool("read"), extensionTool("custom")];
+		const mock = createMockPi({ activeTools: ["read"], allTools });
+		planMode(mock.pi, {
+			readSettings: () => readPlanModeSettings(settingsPath),
+			settingsPath,
+		});
+		const tui = createTuiHarness();
+		const context = createMockContext({
+			mode: "tui",
+			hasUI: true,
+			custom: tui.custom,
+			model: DEFERRED_CAPABLE_MODEL,
+		});
+		await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+		await assert.rejects(access(settingsPath));
+
+		const running = mock.commands.get("plan")?.handler("tools", context.ctx) as Promise<unknown>;
+		await waitForOpenCount(tui, 1, running);
+		tui.press("tui.select.down"); // custom
+		tui.press("tui.select.confirm"); // select custom in addition to the default read
+		await settleWithin(tui.waitForPending(), "the toggle to settle");
+		await waitForOpenCount(tui, 2, running);
+		tui.press("tui.select.down"); // start-with-tools action row
+		tui.press("tui.select.confirm");
+		await settleWithin(running, "start with explicit tools");
+
+		const deadline = Date.now() + 2_000;
+		let saved: { defaultPlanTools: string[] } | undefined;
+		while (Date.now() < deadline) {
+			try {
+				saved = JSON.parse(await readFile(settingsPath, "utf8"));
+				if (saved?.defaultPlanTools) break;
+			} catch {
+				// Not written yet; the cache write is fire-and-forget.
+			}
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		}
+		assert.deepEqual([...(saved?.defaultPlanTools ?? [])].sort(), ["custom", "read"]);
+
+		tui.dispose();
+	} finally {
+		await rm(agentDir, { recursive: true, force: true });
+	}
+});
+
+test("starting again with the same tool selection does not rewrite the settings file", async () => {
+	const agentDir = await mkdtemp(join(tmpdir(), "pi-plan-mode-launch-autocache-noop-"));
+	const settingsPath = join(agentDir, "pi-plan-mode.json");
+	try {
+		await writeFile(settingsPath, '{"thinkingLevel":"inherit","defaultPlanTools":["read"]}\n');
+		const mock = createMockPi({ activeTools: ["read"], allTools: [builtinTool("read")] });
+		planMode(mock.pi, {
+			readSettings: () => readPlanModeSettings(settingsPath),
+			settingsPath,
+		});
+		const context = createMockContext({ mode: "tui", hasUI: true });
+		await mock.events.get("session_start")?.[0]?.({ reason: "startup" }, context.ctx);
+		const before = await readFile(settingsPath, "utf8");
+
+		await mock.commands.get("plan")?.handler("start", context.ctx);
+
+		const after = await readFile(settingsPath, "utf8");
+		assert.equal(after, before);
+	} finally {
+		await rm(agentDir, { recursive: true, force: true });
+	}
 });
