@@ -14,6 +14,7 @@ import {
 	planModeCompleted,
 	renderPlanModeCompletion,
 } from "./completion-tool.js";
+import { supportsNativeDeferredToolLoading } from "./deferred-tools.js";
 import { isStaleExtensionContextError } from "./extension-runtime.js";
 import {
 	createFinalizationRequestCoordinator,
@@ -94,7 +95,12 @@ import {
 	findBlockedPowerShellCommandSegment,
 	readCommand,
 } from "./tool-policy.js";
-import { compareTools, snapshotPlanModeSelectedNames, toolPolicyLabel } from "./tool-selection.js";
+import {
+	compareTools,
+	snapshotPlanModeSelectedNames,
+	toolPolicyLabel,
+	unique,
+} from "./tool-selection.js";
 import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
@@ -588,12 +594,21 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		}
 		const allowedToolNames = new Set(planModePolicyToolNames());
 		if (!activeToolNames.has(event.toolName)) {
-			return {
-				block: true,
-				reason: allowedToolNames.has(event.toolName)
-					? `Plan mode blocks tool '${event.toolName}' because it was admitted to the active Plan workflow but is currently inactive. Reactivate it to continue without restarting.`
-					: `Plan mode blocks tool '${event.toolName}' because it is registered but inactive. Activate it before starting the next Plan workflow.`,
-			};
+			// A tool admitted to the Plan policy while inactive was only admitted because the
+			// model supports Pi's native deferred-tool-loading protocol (see
+			// activePlanPolicyTools()). Activate it additively, the same way pi-firecrawl's and
+			// pi-chrome-devtools' lazy-tools.ts activate a deferred tool on first use, instead of
+			// blocking the call.
+			if (allowedToolNames.has(event.toolName) && supportsNativeDeferredToolLoading(ctx.model)) {
+				pi.setActiveTools(unique([...pi.getActiveTools(), event.toolName]));
+			} else {
+				return {
+					block: true,
+					reason: allowedToolNames.has(event.toolName)
+						? `Plan mode blocks tool '${event.toolName}' because it was admitted to the active Plan workflow but is currently inactive. Reactivate it to continue without restarting.`
+						: `Plan mode blocks tool '${event.toolName}' because it is registered but inactive. Activate it before starting the next Plan workflow.`,
+				};
+			}
 		}
 		if (!allowedToolNames.has(event.toolName)) {
 			return {
@@ -1470,6 +1485,12 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 	}
 
 	function activePlanPolicyTools() {
+		// A tool that Pi already knows about (via getAllTools()) but has not yet activated is
+		// plannable too, as long as the current model supports Pi's native additive
+		// deferred-tool-loading protocol: the tool_call handler below activates it on demand
+		// instead of clobbering the active set. Models without that support keep the original,
+		// active-only policy so Plan mode never silently changes their model-visible tool list.
+		if (supportsNativeDeferredToolLoading(currentSessionContext?.model)) return selectableTools();
 		const activeNames = new Set(safeGetActiveTools());
 		return selectableTools().filter((tool) => activeNames.has(tool.name));
 	}
