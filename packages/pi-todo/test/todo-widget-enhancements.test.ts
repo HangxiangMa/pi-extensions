@@ -304,6 +304,37 @@ test("returns actionable validation errors before schema validation and direct e
 	assert.equal(current.widgets.length, widgetCount);
 });
 
+test("tolerates a null or empty reason on a non-blocked todo instead of rejecting it", () => {
+	// Models that resubmit a todo after being told to drop `reason` sometimes send
+	// `reason: null` or `reason: ""` rather than omitting the key outright. Only a
+	// genuinely populated reason on a non-blocked todo should be rejected.
+	assert.deepEqual(
+		validateTodoArguments({
+			todos: [{ step: "x", status: "pending", reason: null }],
+		}),
+		{ todos: [{ step: "x", status: "pending" }] },
+	);
+	assert.deepEqual(
+		validateTodoArguments({
+			todos: [{ step: "x", status: "completed", reason: "" }],
+		}),
+		{ todos: [{ step: "x", status: "completed" }] },
+	);
+	assert.deepEqual(
+		validateTodoArguments({
+			todos: [{ step: "x", status: "in_progress", reason: "   " }],
+		}),
+		{ todos: [{ step: "x", status: "in_progress" }] },
+	);
+	assert.throws(
+		() =>
+			validateTodoArguments({
+				todos: [{ step: "x", status: "pending", reason: "not allowed" }],
+			}),
+		/reason only when status is blocked/iu,
+	);
+});
+
 test("loads display settings, warns safely, and ignores stale async loads", async () => {
 	const collapsedHarness = createHarness({
 		loadSettings: async () =>
