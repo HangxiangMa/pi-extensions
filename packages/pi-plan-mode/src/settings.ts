@@ -24,6 +24,7 @@ export const IMPLEMENTATION_PLAN_RETENTIONS = [
 	"clear-after-first-run",
 	"keep",
 ] as const;
+export const DEFERRED_TOOL_LOADING_MODES = ["auto", "always", "never"] as const;
 export const DEFAULT_PLAN_EXPORT_PATH = "PLAN.md";
 const MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
 const BASE_KEYS = new Set([
@@ -84,6 +85,7 @@ const MAX_PLAN_EXPORT_PATH_LENGTH = 4096;
 export type PlanModeThinkingLevel = (typeof PLAN_MODE_THINKING_LEVELS)[number];
 export type ImplementationPlanRetention = (typeof IMPLEMENTATION_PLAN_RETENTIONS)[number];
 export type PlanModeFixedThinkingLevel = Exclude<PlanModeThinkingLevel, "inherit">;
+export type DeferredToolLoadingMode = (typeof DEFERRED_TOOL_LOADING_MODES)[number];
 export interface PlanModeSettings {
 	thinkingLevel: PlanModeThinkingLevel;
 	defaultPlanTools?: string[];
@@ -91,6 +93,7 @@ export interface PlanModeSettings {
 	defaultPlanExportPath?: string;
 	safeSubcommands?: SafeSubcommands;
 	toggleShortcut?: KeyId;
+	deferredToolLoading?: DeferredToolLoadingMode;
 }
 export interface PlanModeSettingsPatch {
 	thinkingLevel?: PlanModeThinkingLevel;
@@ -98,6 +101,7 @@ export interface PlanModeSettingsPatch {
 	implementationPlanRetention?: ImplementationPlanRetention;
 	defaultPlanExportPath?: string | null;
 	toggleShortcut?: KeyId | null;
+	deferredToolLoading?: DeferredToolLoadingMode;
 }
 export interface UpdatePlanModeSettingsOptions {
 	settingsPath?: string;
@@ -165,6 +169,13 @@ export function normalizePlanModeSettings(value: unknown): PlanModeSettings | un
 		const toggleShortcut = normalizeKeyId(Reflect.get(value, "toggleShortcut"));
 		if (!toggleShortcut) return undefined;
 		settings.toggleShortcut = toggleShortcut;
+	}
+	if (Object.hasOwn(value, "deferredToolLoading")) {
+		const deferredToolLoading = Reflect.get(value, "deferredToolLoading");
+		if (!DEFERRED_TOOL_LOADING_MODES.includes(deferredToolLoading as DeferredToolLoadingMode)) {
+			return undefined;
+		}
+		settings.deferredToolLoading = deferredToolLoading as DeferredToolLoadingMode;
 	}
 	if (Object.hasOwn(value, "safeSubcommands")) {
 		const safeSubcommands = normalizeSafeSubcommands(Reflect.get(value, "safeSubcommands"));
@@ -303,6 +314,9 @@ export function updatePlanModeSettings(
 		if (patch.toggleShortcut === null) delete updated.toggleShortcut;
 		else if (patch.toggleShortcut !== undefined) {
 			updated.toggleShortcut = patch.toggleShortcut;
+		}
+		if (patch.deferredToolLoading !== undefined) {
+			updated.deferredToolLoading = patch.deferredToolLoading;
 		}
 		const settings = normalizePlanModeSettings(updated);
 		if (!settings) throw invalidSettingsError(settingsPath, "invalid settings shape");
@@ -484,4 +498,8 @@ export function configuredPlanExportPath(settings: PlanModeSettings) {
 
 export function configuredPlanModeToggleShortcut(settings: PlanModeSettings): KeyId | undefined {
 	return settings.toggleShortcut;
+}
+
+export function configuredDeferredToolLoading(settings: PlanModeSettings): DeferredToolLoadingMode {
+	return settings.deferredToolLoading ?? "auto";
 }

@@ -1,4 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { DeferredToolLoadingMode } from "./settings.js";
+
+const ENV_OVERRIDE_VAR = "PI_PLAN_MODE_DEFERRED";
+
+function envDeferredToolLoadingOverride(): DeferredToolLoadingMode | undefined {
+	const raw = process.env[ENV_OVERRIDE_VAR];
+	return raw === "always" || raw === "never" ? raw : undefined;
+}
 
 /**
  * Reports whether the selected model and provider support Pi's native additive
@@ -8,8 +16,20 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
  * This mirrors the capability check in pi-firecrawl's and pi-chrome-devtools' `lazy-tools.ts`.
  * Plan mode cannot import that check from either package (extensions must stay free of
  * extension-to-extension dependencies), so the same model-capability logic is duplicated here.
+ *
+ * `override` lets a deployment force this on/off regardless of provider capability — some
+ * assemblies (ours included) always drive tool activation client-side via `setActiveTools()`,
+ * which works on any provider, making the upstream provider-capability gate below overly
+ * conservative for them. Settings ("pi-plan-mode.json"'s `deferredToolLoading`) take priority;
+ * `PI_PLAN_MODE_DEFERRED=always|never` is a fallback for when settings leave it at "auto".
  */
-export function supportsNativeDeferredToolLoading(model: ExtensionContext["model"]): boolean {
+export function supportsNativeDeferredToolLoading(
+	model: ExtensionContext["model"],
+	override: DeferredToolLoadingMode = "auto",
+): boolean {
+	const resolved = override === "auto" ? (envDeferredToolLoadingOverride() ?? "auto") : override;
+	if (resolved === "always") return true;
+	if (resolved === "never") return false;
 	if (!model) return false;
 	if (model.api === "anthropic-messages") {
 		const configured = compatBoolean(model.compat, "supportsToolReferences");
