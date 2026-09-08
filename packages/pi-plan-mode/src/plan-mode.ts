@@ -72,6 +72,7 @@ import {
 } from "./saved-plan-preflight.js";
 import {
 	awaitPlanModeSettingsWrites,
+	configuredDeferredToolLoading,
 	configuredImplementationPlanRetention,
 	configuredPlanModeToggleShortcut,
 	configuredThinkingLevel,
@@ -599,7 +600,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 			// activePlanPolicyTools()). Activate it additively, the same way pi-firecrawl's and
 			// pi-chrome-devtools' lazy-tools.ts activate a deferred tool on first use, instead of
 			// blocking the call.
-			if (allowedToolNames.has(event.toolName) && supportsNativeDeferredToolLoading(ctx.model)) {
+			if (
+				allowedToolNames.has(event.toolName) &&
+				supportsNativeDeferredToolLoading(ctx.model, configuredDeferredToolLoading(settings))
+			) {
 				pi.setActiveTools(unique([...pi.getActiveTools(), event.toolName]));
 			} else {
 				return {
@@ -1118,7 +1122,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
 		const tools = selectableTools();
 		const activeToolNames = new Set(safeGetActiveTools());
-		const deferredCapable = supportsNativeDeferredToolLoading(currentSessionContext?.model);
+		const deferredCapable = supportsNativeDeferredToolLoading(
+			currentSessionContext?.model,
+			configuredDeferredToolLoading(settings),
+		);
 		const initialSelectedNames = snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot());
 		const retainsInactiveSelection =
 			state.selectedToolNames !== undefined ||
@@ -1526,7 +1533,14 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 		// deferred-tool-loading protocol: the tool_call handler below activates it on demand
 		// instead of clobbering the active set. Models without that support keep the original,
 		// active-only policy so Plan mode never silently changes their model-visible tool list.
-		if (supportsNativeDeferredToolLoading(currentSessionContext?.model)) return selectableTools();
+		if (
+			supportsNativeDeferredToolLoading(
+				currentSessionContext?.model,
+				configuredDeferredToolLoading(settings),
+			)
+		) {
+			return selectableTools();
+		}
 		const activeNames = new Set(safeGetActiveTools());
 		return selectableTools().filter((tool) => activeNames.has(tool.name));
 	}
