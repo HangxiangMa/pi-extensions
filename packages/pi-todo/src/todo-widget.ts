@@ -82,7 +82,8 @@ const TodoParameters = Type.Object({
 				Type.String({
 					minLength: 1,
 					maxLength: MAX_TODO_REASON_LENGTH,
-					description: "Required only for blocked todos; explain what must unblock the step",
+					description:
+						"Only set when status is blocked, explaining what must unblock the step. Omit this field entirely for every other status.",
 				}),
 			),
 		}),
@@ -180,7 +181,7 @@ export default function todoWidgetExtension(
 		name: TOOL_NAME,
 		label: "Todo List",
 		description:
-			"Replace the current session todo list with the complete supplied todos. Call update_todo_list whenever actual step state changes; keep at most one todo in_progress, require a reason for each blocked todo, and send an empty todos array to clear it.",
+			"Replace the current session todo list with the complete supplied todos. Call update_todo_list whenever actual step state changes; keep at most one todo in_progress, require a reason for each blocked todo (omit reason entirely for every other status), and send an empty todos array to clear it.",
 		promptSnippet: "Maintain the complete session todo list as multi-step work progresses",
 		promptGuidelines: [
 			"Use update_todo_list to track work with multiple meaningful steps; skip it for simple, single-step tasks.",
@@ -399,7 +400,7 @@ export function validateTodoArguments(value: unknown): { todos: Todo[] } {
 			todos.push({ step: entry.step, status, reason: entry.reason });
 			continue;
 		}
-		if (Object.hasOwn(entry, "reason")) {
+		if (hasMeaningfulReason(entry)) {
 			rejectTodos(`item ${item} may include reason only when status is blocked.`);
 		}
 		todos.push({ step: entry.step, status });
@@ -415,6 +416,15 @@ export function validateTodoArguments(value: unknown): { todos: Todo[] } {
 
 function rejectTodos(message: string): never {
 	throw new Error(`Todo list rejected: ${message} ${RESUBMIT_GUIDANCE}`);
+}
+
+// Models frequently "clear" an optional field by sending it as null or an empty
+// string rather than omitting the key outright (especially when resubmitting
+// after being told to drop it). Treat those as equivalent to absence so a
+// harmless empty/null reason on a non-blocked todo doesn't trigger a rejection
+// loop; only a genuinely populated reason on a non-blocked todo is invalid.
+function hasMeaningfulReason(entry: Record<string, unknown>): boolean {
+	return typeof entry.reason === "string" && entry.reason.trim().length > 0;
 }
 
 function todoContextContent(todos: readonly Todo[]): string {
@@ -650,7 +660,7 @@ function isTodos(value: unknown): value is Todo[] {
 			) {
 				return false;
 			}
-		} else if (Object.hasOwn(entry, "reason")) {
+		} else if (hasMeaningfulReason(entry)) {
 			return false;
 		}
 	}

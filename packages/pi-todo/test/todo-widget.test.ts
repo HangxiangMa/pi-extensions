@@ -66,7 +66,8 @@ test("registers the todos-by-step schema and concise maintenance guidance", () =
 		description: "The step's current status",
 	});
 	assert.deepEqual(todosSchema.items?.properties?.reason, {
-		description: "Required only for blocked todos; explain what must unblock the step",
+		description:
+			"Only set when status is blocked, explaining what must unblock the step. Omit this field entirely for every other status.",
 		type: "string",
 		minLength: 1,
 		maxLength: 200,
