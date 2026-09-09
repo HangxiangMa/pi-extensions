@@ -624,11 +624,7 @@ test("restores current and legacy branch-local state on startup and tree navigat
 		}),
 	);
 	await harness.emit("session_tree", current.ctx);
-	assert.deepEqual(current.widgets.at(-1)?.content?.(current.tui, theme).render(80), [
-		"─".repeat(80),
-		"Todo · 1/1 complete",
-		"✓ finished branch",
-	]);
+	assert.equal(current.widgets.at(-1)?.content, undefined);
 });
 
 test("guards component widgets to TUI mode and ignores stale session shutdown", async () => {
