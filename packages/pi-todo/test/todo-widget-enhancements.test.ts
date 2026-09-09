@@ -213,7 +213,7 @@ test("cancels completion timers on updates, clears, tree changes, and session re
 			}),
 		);
 		await harness.emit("session_tree", previous.ctx);
-		assert.equal(typeof previous.widgets.at(-1)?.content, "function");
+		assert.equal(previous.widgets.at(-1)?.content, undefined);
 
 		await setTodos(harness, previous.ctx, [{ step: "session", status: "in_progress" }]);
 		await setTodos(harness, previous.ctx, [{ step: "session", status: "completed" }]);

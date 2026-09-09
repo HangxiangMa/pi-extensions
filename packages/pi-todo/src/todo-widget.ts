@@ -253,6 +253,8 @@ export default function todoWidgetExtension(
 		completionSummaryHidden = false;
 		settings = cloneDefaultSettings();
 		restoreBranchState(ctx);
+		// Completed todos restored from session history are stale UI, not active work.
+		completionSummaryHidden = allTodosCompleted(todos);
 		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
 
 		let loaded: TodoSettingsLoadResult;
@@ -307,6 +309,8 @@ export default function todoWidgetExtension(
 		cancelCompletionSummary();
 		completionSummaryHidden = false;
 		restoreBranchState(ctx);
+		// Do not resurrect a completed todo widget while navigating old branches.
+		completionSummaryHidden = allTodosCompleted(todos);
 		publish(ctx);
 	});
 
