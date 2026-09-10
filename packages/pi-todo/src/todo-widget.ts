@@ -110,6 +110,7 @@ export default function todoWidgetExtension(
 	let completionTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
 	let completionToken = 0;
 	let completionSummaryHidden = false;
+	let widgetRequestRender: (() => void) | undefined;
 
 	const ownsSession = (ctx: ExtensionContext): boolean => ctx.sessionManager === activeSession;
 
@@ -123,6 +124,7 @@ export default function todoWidgetExtension(
 		if (!ownsSession(ctx) || ctx.mode !== "tui") return;
 		if (!settings.widget.enabled || todos.length === 0 || completionSummaryHidden) {
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
+			widgetRequestRender = undefined;
 			return;
 		}
 
@@ -130,16 +132,20 @@ export default function todoWidgetExtension(
 		const widgetSettings = { ...settings.widget };
 		ctx.ui.setWidget(
 			WIDGET_KEY,
-			(tui, theme) => ({
-				render: (width) =>
-					renderTodoWidget(snapshot, theme, width, {
-						settings: widgetSettings,
-						terminalRows: tui.terminal.rows,
-					}),
-				invalidate: () => {},
-			}),
+			(tui, theme) => {
+				widgetRequestRender = () => tui.requestRender();
+				return {
+					render: (width) =>
+						renderTodoWidget(snapshot, theme, width, {
+							settings: widgetSettings,
+							terminalRows: tui.terminal.rows,
+						}),
+					invalidate: () => {},
+				};
+			},
 			WIDGET_OPTIONS,
 		);
+		widgetRequestRender?.();
 	};
 
 	const publishCompletionSummary = (ctx: ExtensionContext): void => {
@@ -153,12 +159,16 @@ export default function todoWidgetExtension(
 		const total = todos.length;
 		ctx.ui.setWidget(
 			WIDGET_KEY,
-			(_tui, theme) => ({
-				render: (width) => renderCompletionSummary(total, theme, width),
-				invalidate: () => {},
-			}),
+			(tui, theme) => {
+				widgetRequestRender = () => tui.requestRender();
+				return {
+					render: (width) => renderCompletionSummary(total, theme, width),
+					invalidate: () => {},
+				};
+			},
 			WIDGET_OPTIONS,
 		);
+		widgetRequestRender?.();
 		const ownerSession = activeSession;
 		const token = completionToken;
 		completionTimer = scheduleTimeout(() => {
@@ -256,6 +266,7 @@ export default function todoWidgetExtension(
 		// Completed todos restored from session history are stale UI, not active work.
 		completionSummaryHidden = allTodosCompleted(todos);
 		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
+		widgetRequestRender = undefined;
 
 		let loaded: TodoSettingsLoadResult;
 		try {
@@ -320,6 +331,7 @@ export default function todoWidgetExtension(
 		generation += 1;
 		cancelCompletionSummary();
 		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
+		widgetRequestRender = undefined;
 		todos = [];
 		settings = cloneDefaultSettings();
 		restoredBoundary = undefined;
