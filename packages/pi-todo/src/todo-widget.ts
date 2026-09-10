@@ -133,7 +133,7 @@ export default function todoWidgetExtension(
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(tui, theme) => {
-				widgetRequestRender = () => tui.requestRender();
+				widgetRequestRender = () => tui.requestRender?.();
 				return {
 					render: (width) =>
 						renderTodoWidget(snapshot, theme, width, {
@@ -160,7 +160,7 @@ export default function todoWidgetExtension(
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(tui, theme) => {
-				widgetRequestRender = () => tui.requestRender();
+				widgetRequestRender = () => tui.requestRender?.();
 				return {
 					render: (width) => renderCompletionSummary(total, theme, width),
 					invalidate: () => {},
@@ -416,9 +416,9 @@ export function validateTodoArguments(value: unknown): { todos: Todo[] } {
 			todos.push({ step: entry.step, status, reason: entry.reason });
 			continue;
 		}
-		if (hasMeaningfulReason(entry)) {
-			rejectTodos(`item ${item} may include reason only when status is blocked.`);
-		}
+		// `reason` is meaningful only for blocked todos. Drop it from every other
+		// status instead of rejecting the complete update; some model/tool bridges
+		// incorrectly send optional fields on every item.
 		todos.push({ step: entry.step, status });
 	}
 
