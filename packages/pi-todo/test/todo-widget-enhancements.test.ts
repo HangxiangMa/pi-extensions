@@ -244,10 +244,6 @@ test("returns actionable validation errors before schema validation and direct e
 			{ todos: [{ step: "x", status: "blocked", reason: "x".repeat(201) }] },
 			/item 1 reason exceeds 200/iu,
 		],
-		[
-			{ todos: [{ step: "x", status: "pending", reason: "not allowed" }] },
-			/reason only when status is blocked/iu,
-		],
 	];
 	for (const [input, pattern] of cases) assert.throws(() => validateTodoArguments(input), pattern);
 
@@ -326,12 +322,11 @@ test("tolerates a null or empty reason on a non-blocked todo instead of rejectin
 		}),
 		{ todos: [{ step: "x", status: "in_progress" }] },
 	);
-	assert.throws(
-		() =>
-			validateTodoArguments({
-				todos: [{ step: "x", status: "pending", reason: "not allowed" }],
-			}),
-		/reason only when status is blocked/iu,
+	assert.deepEqual(
+		validateTodoArguments({
+			todos: [{ step: "x", status: "pending", reason: "not allowed" }],
+		}),
+		{ todos: [{ step: "x", status: "pending" }] },
 	);
 });
 
