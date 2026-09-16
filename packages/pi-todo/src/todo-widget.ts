@@ -133,7 +133,7 @@ export default function todoWidgetExtension(
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(tui, theme) => {
-				widgetRequestRender = () => tui.requestRender?.();
+				widgetRequestRender = () => tui.requestRender();
 				return {
 					render: (width) =>
 						renderTodoWidget(snapshot, theme, width, {
@@ -160,7 +160,7 @@ export default function todoWidgetExtension(
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(tui, theme) => {
-				widgetRequestRender = () => tui.requestRender?.();
+				widgetRequestRender = () => tui.requestRender();
 				return {
 					render: (width) => renderCompletionSummary(total, theme, width),
 					invalidate: () => {},
