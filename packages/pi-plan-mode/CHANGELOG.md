@@ -1,5 +1,36 @@
 # @narumitw/pi-plan-mode
 
+## 0.58.0
+
+### Minor Changes
+
+- b745330: Add persistent fresh implementation model and thinking defaults with a same-as-plan fallback.
+- 0ef037d: Add one-shot model and thinking selection before fresh ready-plan implementation.
+
+### Patch Changes
+
+- 7c9a062: Defer automatic ready-plan fresh session handoffs until lifecycle dispatch and prompt cleanup finish.
+- Updated dependencies [4485b49]
+- Updated dependencies [6b1e009]
+  - @narumitw/pi-tui-kit@0.62.0
+
+## 0.57.1
+
+### Patch Changes
+
+- 31b3dde: Remove the implementation model and thinking selectors, restoring Plan implementation handoffs to the current model and normal thinking behavior.
+
+## 0.57.0
+
+### Minor Changes
+
+- e2af16b: Add optional implementation model and thinking defaults plus per-menu implementation options for same-session and fresh-session handoffs. Apply choices only at implementation start without changing Pi defaults or automatically restoring the planner's model after a run ends.
+
+### Patch Changes
+
+- Updated dependencies [317f7bd]
+  - @narumitw/pi-tui-kit@0.61.0
+
 ## 0.56.0
 
 ### Minor Changes

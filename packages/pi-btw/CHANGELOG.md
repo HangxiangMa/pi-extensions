@@ -1,5 +1,56 @@
 # @narumitw/pi-btw
 
+## 0.59.0
+
+### Minor Changes
+
+- 022ba82: Render supported Mermaid fences as width-safe, themed Unicode diagrams in side-thread transcripts, with readable source fallbacks for malformed, unsupported, or oversized diagrams.
+
+### Patch Changes
+
+- ddaccd2: Complete `/btw` fullscreen cancellation by forwarding upstream aborts, closing mounted composers, restoring the parent TUI, and stopping lazy Mermaid transcript preparation when cancelled.
+
+## 0.58.1
+
+### Patch Changes
+
+- ad0fbc0: Honor the API base URL returned by Pi's authentication resolver for both inherited and explicitly configured side-thread models. This fixes misdirected requests for GitHub Copilot accounts that use a different endpoint from the provider default, without changing the main session's model.
+
+## 0.58.0
+
+### Minor Changes
+
+- 609f6a8: Add BTW-only exit, thinking-cycle, and bring-to-main keybindings in `/btw` → Settings, with conflict validation and per-action reset. Preserve Ctrl+C as hard cancel and keep pasted input out of shortcut handling.
+
+### Patch Changes
+
+- Updated dependencies [317f7bd]
+  - @narumitw/pi-tui-kit@0.61.0
+
+## 0.57.1
+
+### Patch Changes
+
+- ee07eb8: Forward Pi session headers to OpenCode providers for side-thread requests.
+
+## 0.57.0
+
+### Minor Changes
+
+- f24a5b0: Add a themed, clickable Jump to latest control that honors Pi's effective fullscreen bottom keybinding.
+
+## 0.56.2
+
+### Patch Changes
+
+- c0fe03e: Wait for Pi's terminal input drain before restoring the parent fullscreen TUI after Ctrl+C.
+
+## 0.56.1
+
+### Patch Changes
+
+- 612df75: Defer Ctrl+C terminal restoration until input dispatch finishes so Windows fullscreen sessions redraw and scroll correctly.
+
 ## 0.56.0
 
 ### Minor Changes
