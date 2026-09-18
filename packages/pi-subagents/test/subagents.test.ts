@@ -812,6 +812,7 @@ test("sanitizes terminal controls at child-output display boundaries", async () 
     (entry) => (entry.message as { customType?: string }).customType === "pi-subagents-completion",
   );
   assert.ok(completion);
+  assert.deepEqual(completion.options, { deliverAs: "steer", triggerTurn: true });
   assert.equal((completion.message as { content: string }).content.includes(String.fromCharCode(27)), false);
 });
 

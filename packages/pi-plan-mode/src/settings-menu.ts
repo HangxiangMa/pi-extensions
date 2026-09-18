@@ -1,6 +1,7 @@
 import type { ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { defineMenu, type RunMenuResult, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
 import { PLAN_MODE_COMPLETE_TOOL_NAME } from "./completion-tool.js";
+import { supportsNativeDeferredToolLoading } from "./deferred-tools.js";
 import {
   type AvailableImplementationModel,
   findAvailableImplementationModel,
@@ -11,11 +12,14 @@ import { retentionLabel } from "./implementation-retention.js";
 import { planExportDestination } from "./plan-export.js";
 import { PLAN_MODE_QUESTION_TOOL_NAME } from "./question-tool.js";
 import {
+  configuredDeferredToolLoading,
   configuredImplementationModel,
   configuredImplementationPlanRetention,
   configuredImplementationThinkingLevel,
   configuredPlanExportPath,
   configuredPlanModeToggleShortcut,
+  DEFERRED_TOOL_LOADING_MODES,
+  type DeferredToolLoadingMode,
   IMPLEMENTATION_PLAN_RETENTIONS,
   IMPLEMENTATION_THINKING_LEVELS,
   normalizeKeyId,
@@ -63,7 +67,8 @@ type Action =
   | "open-export"
   | "set-export"
   | "open-shortcut"
-  | "set-shortcut";
+  | "set-shortcut"
+  | "set-deferred";
 
 export async function showPlanModeSettings(
   ctx: ExtensionContext,
@@ -73,6 +78,8 @@ export async function showPlanModeSettings(
   const readSettings = options.readSettings ?? readPlanModeSettings;
   const updateSettings = options.updateSettings ?? updatePlanModeSettings;
   const activeToolNames = new Set(options.activeToolNames ?? options.tools.map((tool) => tool.name));
+  const deferredCapableFor = (settings: PlanModeSettings) =>
+    supportsNativeDeferredToolLoading(ctx.model, configuredDeferredToolLoading(settings));
   const tools = options.tools.filter(
     (tool) => tool.name !== PLAN_MODE_QUESTION_TOOL_NAME && tool.name !== PLAN_MODE_COMPLETE_TOOL_NAME,
   );
@@ -163,6 +170,14 @@ export async function showPlanModeSettings(
                   currentValue: configuredPlanModeToggleShortcut(state.settings) ?? "none",
                   action: "open-shortcut",
                 },
+                {
+                  id: "deferredToolLoading",
+                  label: "Deferred tool loading",
+                  description: "Control additive activation of inactive tools on first use.",
+                  currentValue: configuredDeferredToolLoading(state.settings),
+                  values: DEFERRED_TOOL_LOADING_MODES,
+                  action: "set-deferred",
+                },
               ],
             },
       tools: ({ state }) => ({
@@ -175,7 +190,13 @@ export async function showPlanModeSettings(
         ],
         enableSearch: true,
         viewportSize: 10,
-        items: defaultToolItems(tools, state.settings.defaultPlanTools, activeToolNames, toolItemIds),
+        items: defaultToolItems(
+          tools,
+          state.settings.defaultPlanTools,
+          activeToolNames,
+          toolItemIds,
+          deferredCapableFor(state.settings),
+        ),
         action: "toggle-tool",
         actions: [
           {
@@ -244,6 +265,15 @@ export async function showPlanModeSettings(
         );
       },
       "open-tools": async () => ({ kind: "to", screen: "tools" }),
+      "set-deferred": async ({ ctx: actionCtx, value, signal }) => {
+        if (!DEFERRED_TOOL_LOADING_MODES.includes(value as DeferredToolLoadingMode)) return { kind: "rejected" };
+        return savePatch(
+          actionCtx,
+          { deferredToolLoading: value as DeferredToolLoadingMode },
+          signal,
+          `Deferred tool loading: ${value}.`,
+        );
+      },
       "set-retention": async ({ ctx: actionCtx, value, signal }) => {
         const implementationPlanRetention = retentionFromLabel(value);
         if (!implementationPlanRetention) return { kind: "rejected" };
@@ -329,7 +359,8 @@ export async function showPlanModeSettings(
       },
       "toggle-tool": async ({ ctx: actionCtx, state, itemId, selected, signal }) => {
         const tool = itemId ? toolsByItemId.get(itemId) : undefined;
-        if (!tool || !activeToolNames.has(tool.name) || !canSelectToolInPlanMode(tool)) {
+        const active = tool ? activeToolNames.has(tool.name) : false;
+        if (!tool || (!active && !deferredCapableFor(state.settings)) || !canSelectToolInPlanMode(tool)) {
           return { kind: "rejected" };
         }
         const names = explicitToolNames(tools, state.settings.defaultPlanTools);
@@ -474,17 +505,21 @@ function defaultToolItems(
   configured: string[] | undefined,
   activeToolNames: ReadonlySet<string>,
   toolItemIds: ReadonlyMap<string, string>,
+  deferredCapable: boolean,
 ) {
   const selected = new Set(explicitToolNames(tools, configured));
   const availableNames = new Set(tools.map((tool) => tool.name));
   const items = tools.map((tool) => {
     const active = activeToolNames.has(tool.name);
-    const selectable = active && canSelectToolInPlanMode(tool);
+    const retained = !active && selected.has(tool.name);
+    const selectable = (active || deferredCapable) && canSelectToolInPlanMode(tool);
     const policy = active
       ? toolPolicyLabel(tool)
-      : selected.has(tool.name)
+      : retained
         ? "not active yet; retained for first-request resolution"
-        : "not active in this Pi session";
+        : deferredCapable
+          ? "not active yet; will be deferred-activated on first use"
+          : "not active in this Pi session";
     const description = tool.description ?? "No description available";
     return {
       id: toolItemIds.get(tool.name) as string,
@@ -493,13 +528,13 @@ function defaultToolItems(
       searchText: `${policy} ${description}`,
       selected: selected.has(tool.name),
       disabled: !selectable,
-      disabledReason: !active
-        ? selected.has(tool.name)
-          ? "Not active yet; retained and resolved before the first request"
-          : "Not active in Pi; Plan mode will not activate it"
-        : selectable
-          ? undefined
-          : "Blocked by Plan-mode policy",
+      disabledReason: !selectable
+        ? !canSelectToolInPlanMode(tool)
+          ? "Blocked by Plan-mode policy"
+          : retained
+            ? "Not active yet; retained and resolved before the first request"
+            : "Not active in Pi; Plan mode will not activate it"
+        : undefined,
     };
   });
   for (const [index, name] of (configured ?? []).entries()) {
