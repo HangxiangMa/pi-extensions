@@ -130,6 +130,7 @@ export default function todoWidgetExtension(
 
 		const snapshot = cloneTodos(todos);
 		const widgetSettings = { ...settings.widget };
+		const previousRequestRender = widgetRequestRender;
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(tui, theme) => {
@@ -145,7 +146,7 @@ export default function todoWidgetExtension(
 			},
 			WIDGET_OPTIONS,
 		);
-		widgetRequestRender?.();
+		(widgetRequestRender ?? previousRequestRender)?.();
 	};
 
 	const publishCompletionSummary = (ctx: ExtensionContext): void => {
@@ -157,6 +158,7 @@ export default function todoWidgetExtension(
 		}
 
 		const total = todos.length;
+		const previousRequestRender = widgetRequestRender;
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			(tui, theme) => {
@@ -168,7 +170,7 @@ export default function todoWidgetExtension(
 			},
 			WIDGET_OPTIONS,
 		);
-		widgetRequestRender?.();
+		(widgetRequestRender ?? previousRequestRender)?.();
 		const ownerSession = activeSession;
 		const token = completionToken;
 		completionTimer = scheduleTimeout(() => {
