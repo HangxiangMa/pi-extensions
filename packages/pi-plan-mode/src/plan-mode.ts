@@ -17,6 +17,7 @@ import {
   planModeCompleted,
   renderPlanModeCompletion,
 } from "./completion-tool.js";
+import { supportsNativeDeferredToolLoading } from "./deferred-tools.js";
 import { isStaleExtensionContextError } from "./extension-runtime.js";
 import {
   createFinalizationRequestCoordinator,
@@ -69,6 +70,7 @@ import { assertPlanModeHelperToolsAvailable, planModeHelperToolsAvailable } from
 import { preflightSavedPlanImplementation, savedPlanBlocksNewWorkflow } from "./saved-plan-preflight.js";
 import {
   awaitPlanModeSettingsWrites,
+  configuredDeferredToolLoading,
   configuredImplementationPlanRetention,
   configuredPlanModeToggleShortcut,
   configuredThinkingLevel,
@@ -94,7 +96,7 @@ import {
   findBlockedPowerShellCommandSegment,
   readCommand,
 } from "./tool-policy.js";
-import { compareTools, snapshotPlanModeSelectedNames, toolPolicyLabel } from "./tool-selection.js";
+import { compareTools, snapshotPlanModeSelectedNames, toolPolicyLabel, unique } from "./tool-selection.js";
 import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
@@ -669,12 +671,19 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     }
     const allowedToolNames = new Set(planModePolicyToolNames());
     if (!activeToolNames.has(event.toolName)) {
-      return {
-        block: true,
-        reason: allowedToolNames.has(event.toolName)
-          ? `Plan mode blocks tool '${event.toolName}' because it was admitted to the active Plan workflow but is currently inactive. Reactivate it to continue without restarting.`
-          : `Plan mode blocks tool '${event.toolName}' because it is registered but inactive. Activate it before starting the next Plan workflow.`,
-      };
+      if (
+        allowedToolNames.has(event.toolName) &&
+        supportsNativeDeferredToolLoading(ctx.model, configuredDeferredToolLoading(settings))
+      ) {
+        pi.setActiveTools(unique([...pi.getActiveTools(), event.toolName]));
+      } else {
+        return {
+          block: true,
+          reason: allowedToolNames.has(event.toolName)
+            ? `Plan mode blocks tool '${event.toolName}' because it was admitted to the active Plan workflow but is currently inactive. Reactivate it to continue without restarting.`
+            : `Plan mode blocks tool '${event.toolName}' because it is registered but inactive. Activate it before starting the next Plan workflow.`,
+        };
+      }
     }
     if (!allowedToolNames.has(event.toolName)) {
       return {
@@ -1292,6 +1301,10 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     if (!lifecycle.isCurrent() || lifecycle.signal.aborted) return;
     const tools = selectableTools();
     const activeToolNames = new Set(safeGetActiveTools());
+    const deferredCapable = supportsNativeDeferredToolLoading(
+      currentSessionContext?.model,
+      configuredDeferredToolLoading(settings),
+    );
     const initialSelectedNames = snapshotPlanModeSelectedNames(tools, toolSelectionSnapshot());
     const retainsInactiveSelection =
       state.selectedToolNames !== undefined ||
@@ -1330,20 +1343,22 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
             ? toolPolicyLabel(tool)
             : retained
               ? "not active yet; retained for first-request resolution"
-              : "not active in this Pi session";
+              : deferredCapable
+                ? "not active yet; will be deferred-activated on first use"
+                : "not active in this Pi session";
           const description = tool.description ?? "No description available";
           return {
             name: tool.name,
             description: `${policy} · ${description}`,
             searchText: [policy, description].join(" "),
-            disabled: !selectable || !active,
-            disabledReason: !active
-              ? retained
-                ? "Not active yet; retained and resolved before the first request"
-                : "Not active in Pi; Plan mode will not activate it"
-              : selectable
+            disabled: !selectable || (!active && !deferredCapable),
+            disabledReason: !selectable
+              ? "Blocked by Plan-mode policy"
+              : active || deferredCapable
                 ? undefined
-                : "Blocked by Plan-mode policy",
+                : retained
+                  ? "Not active yet; retained and resolved before the first request"
+                  : "Not active in Pi; Plan mode will not activate it",
           };
         }),
         ...pendingNames.map((name) => {
@@ -1369,14 +1384,35 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       startWithTools: (names, signal) => {
         if (signal.aborted || !lifecycle.isCurrent()) return;
         const selectedToolNames = Array.from(
-          new Set(names.filter((name) => activeToolNames.has(name) || retainedInactiveNames.has(name))),
+          new Set(
+            names.filter(
+              (name) =>
+                activeToolNames.has(name) ||
+                retainedInactiveNames.has(name) ||
+                (deferredCapable && registeredNames.has(name)),
+            ),
+          ),
         );
+        cacheDefaultPlanTools(selectedToolNames);
         if (enterPlanMode(ctx, { selectedToolNames, selectedToolKeys: undefined })) {
           ctx.ui.notify("Plan mode enabled with the selected tools.", "info");
         }
       },
       settings: (signal) => showSettings(ctx, signal, lifecycle.isCurrent),
     });
+  }
+
+  function cacheDefaultPlanTools(names: readonly string[]) {
+    if (names.length === 0) return;
+    const current = [...(settings.defaultPlanTools ?? [])].sort();
+    const next = [...new Set(names)].sort();
+    if (current.length === next.length && current.every((name, index) => name === next[index])) return;
+    const updateSettings = dependencies.updateSettings ?? updatePlanModeSettings;
+    void updateSettings({ defaultPlanTools: next }, { settingsPath: dependencies.settingsPath })
+      .then((saved) => {
+        settings = saved;
+      })
+      .catch(() => {});
   }
 
   async function showActivePlanMenu(ctx: ExtensionContext) {
@@ -1620,6 +1656,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   }
 
   function activePlanPolicyTools() {
+    if (supportsNativeDeferredToolLoading(currentSessionContext?.model, configuredDeferredToolLoading(settings))) {
+      return selectableTools();
+    }
     const activeNames = new Set(safeGetActiveTools());
     return selectableTools().filter((tool) => activeNames.has(tool.name));
   }

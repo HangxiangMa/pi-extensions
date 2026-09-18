@@ -77,7 +77,8 @@ const TodoParameters = Type.Object({
         Type.String({
           minLength: 1,
           maxLength: MAX_TODO_REASON_LENGTH,
-          description: "Required only for blocked todos; explain what must unblock the step",
+          description:
+            "Only set when status is blocked, explaining what must unblock the step. Omit this field entirely for every other status.",
         }),
       ),
     }),
@@ -101,6 +102,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
   let completionTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let completionToken = 0;
   let completionSummaryHidden = false;
+  let widgetRequestRender: (() => void) | undefined;
 
   const ownsSession = (ctx: ExtensionContext): boolean => ctx.sessionManager === activeSession;
 
@@ -114,23 +116,29 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
     if (!ownsSession(ctx) || ctx.mode !== "tui") return;
     if (!settings.widget.enabled || todos.length === 0 || completionSummaryHidden) {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
+      widgetRequestRender = undefined;
       return;
     }
 
     const snapshot = cloneTodos(todos);
     const widgetSettings = { ...settings.widget };
+    const previousRequestRender = widgetRequestRender;
     ctx.ui.setWidget(
       WIDGET_KEY,
-      (tui, theme) => ({
-        render: (width) =>
-          renderTodoWidget(snapshot, theme, width, {
-            settings: widgetSettings,
-            terminalRows: tui.terminal.rows,
-          }),
-        invalidate: () => {},
-      }),
+      (tui, theme) => {
+        widgetRequestRender = () => tui.requestRender();
+        return {
+          render: (width) =>
+            renderTodoWidget(snapshot, theme, width, {
+              settings: widgetSettings,
+              terminalRows: tui.terminal.rows,
+            }),
+          invalidate: () => {},
+        };
+      },
       WIDGET_OPTIONS,
     );
+    (widgetRequestRender ?? previousRequestRender)?.();
   };
 
   const publishCompletionSummary = (ctx: ExtensionContext): void => {
@@ -142,14 +150,19 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
     }
 
     const total = todos.length;
+    const previousRequestRender = widgetRequestRender;
     ctx.ui.setWidget(
       WIDGET_KEY,
-      (_tui, theme) => ({
-        render: (width) => renderCompletionSummary(total, theme, width),
-        invalidate: () => {},
-      }),
+      (tui, theme) => {
+        widgetRequestRender = () => tui.requestRender();
+        return {
+          render: (width) => renderCompletionSummary(total, theme, width),
+          invalidate: () => {},
+        };
+      },
       WIDGET_OPTIONS,
     );
+    (widgetRequestRender ?? previousRequestRender)?.();
     const ownerSession = activeSession;
     const token = completionToken;
     completionTimer = scheduleTimeout(() => {
@@ -172,7 +185,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
     name: TOOL_NAME,
     label: "Todo List",
     description:
-      "Replace the current session todo list with the complete supplied todos. Call update_todo_list whenever actual step state changes; keep at most one todo in_progress, require a reason for each blocked todo, and send an empty todos array to clear it.",
+      "Replace the current session todo list with the complete supplied todos. Call update_todo_list whenever actual step state changes; keep at most one todo in_progress, require a reason for each blocked todo (omit reason entirely for every other status), and send an empty todos array to clear it.",
     promptSnippet: "Maintain the complete session todo list as multi-step work progresses",
     promptGuidelines: [
       "Use update_todo_list to track work with multiple meaningful steps; skip it for simple, single-step tasks.",
@@ -241,7 +254,9 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
     completionSummaryHidden = false;
     settings = cloneDefaultSettings();
     restoreBranchState(ctx);
+    completionSummaryHidden = allTodosCompleted(todos);
     if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
+    widgetRequestRender = undefined;
 
     let loaded: TodoSettingsLoadResult;
     try {
@@ -293,6 +308,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
     cancelCompletionSummary();
     completionSummaryHidden = false;
     restoreBranchState(ctx);
+    completionSummaryHidden = allTodosCompleted(todos);
     publish(ctx);
   });
 
@@ -302,6 +318,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
     generation += 1;
     cancelCompletionSummary();
     if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
+    widgetRequestRender = undefined;
     todos = [];
     settings = cloneDefaultSettings();
     restoredBoundary = undefined;
@@ -384,9 +401,9 @@ export function validateTodoArguments(value: unknown): { todos: Todo[] } {
       todos.push({ step: entry.step, status, reason: entry.reason });
       continue;
     }
-    if (Object.hasOwn(entry, "reason")) {
-      rejectTodos(`item ${item} may include reason only when status is blocked.`);
-    }
+    // `reason` is meaningful only for blocked todos. Drop it from every other
+    // status instead of rejecting the complete update; some model/tool bridges
+    // incorrectly send optional fields on every item.
     todos.push({ step: entry.step, status });
   }
 
@@ -398,6 +415,10 @@ export function validateTodoArguments(value: unknown): { todos: Todo[] } {
 
 function rejectTodos(message: string): never {
   throw new Error(`Todo list rejected: ${message} ${RESUBMIT_GUIDANCE}`);
+}
+
+function hasMeaningfulReason(entry: Record<string, unknown>): boolean {
+  return typeof entry.reason === "string" && entry.reason.trim().length > 0;
 }
 
 function todoContextContent(todos: readonly Todo[]): string {
@@ -618,7 +639,7 @@ function isTodos(value: unknown): value is Todo[] {
       ) {
         return false;
       }
-    } else if (Object.hasOwn(entry, "reason")) {
+    } else if (hasMeaningfulReason(entry)) {
       return false;
     }
   }

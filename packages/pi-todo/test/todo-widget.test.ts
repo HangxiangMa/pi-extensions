@@ -66,7 +66,8 @@ test("registers the todos-by-step schema and concise maintenance guidance", () =
     description: "The step's current status",
   });
   assert.deepEqual(todosSchema.items?.properties?.reason, {
-    description: "Required only for blocked todos; explain what must unblock the step",
+    description:
+      "Only set when status is blocked, explaining what must unblock the step. Omit this field entirely for every other status.",
     type: "string",
     minLength: 1,
     maxLength: 200,
@@ -574,11 +575,7 @@ test("restores current and legacy branch-local state on startup and tree navigat
     }),
   );
   await harness.emit("session_tree", current.ctx);
-  assert.deepEqual(current.widgets.at(-1)?.content?.(current.tui, theme).render(80), [
-    "─".repeat(80),
-    "Todo · 1/1 complete",
-    "✓ finished branch",
-  ]);
+  assert.equal(current.widgets.at(-1)?.content, undefined);
 });
 
 test("guards component widgets to TUI mode and ignores stale session shutdown", async () => {

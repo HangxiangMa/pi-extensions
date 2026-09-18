@@ -224,7 +224,6 @@ test("returns actionable validation errors before schema validation and direct e
     [{ todos: [{ step: "x", status: "unknown" }] }, /item 1 status must be/iu],
     [{ todos: [{ step: "x", status: "blocked" }] }, /item 1 is blocked.*reason/iu],
     [{ todos: [{ step: "x", status: "blocked", reason: "x".repeat(201) }] }, /item 1 reason exceeds 200/iu],
-    [{ todos: [{ step: "x", status: "pending", reason: "not allowed" }] }, /reason only when status is blocked/iu],
   ];
   for (const [input, pattern] of cases) assert.throws(() => validateTodoArguments(input), pattern);
 
@@ -279,6 +278,18 @@ test("returns actionable validation errors before schema validation and direct e
     /non-whitespace reason.*resubmit/iu,
   );
   assert.equal(current.widgets.length, widgetCount);
+});
+
+test("tolerates a populated reason on a non-blocked todo instead of rejecting it", () => {
+  assert.deepEqual(validateTodoArguments({ todos: [{ step: "x", status: "pending", reason: "not allowed" }] }), {
+    todos: [{ step: "x", status: "pending" }],
+  });
+  assert.deepEqual(validateTodoArguments({ todos: [{ step: "x", status: "completed", reason: "" }] }), {
+    todos: [{ step: "x", status: "completed" }],
+  });
+  assert.deepEqual(validateTodoArguments({ todos: [{ step: "x", status: "in_progress", reason: null }] }), {
+    todos: [{ step: "x", status: "in_progress" }],
+  });
 });
 
 test("loads display settings, warns safely, and ignores stale async loads", async () => {
