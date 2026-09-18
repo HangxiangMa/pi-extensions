@@ -1,5 +1,23 @@
 # @narumitw/pi-herdr
 
+## 0.3.0
+
+### Minor Changes
+
+- 78eeac4: Add guarded automatic cleanup guidance for temporary task-owned Herdr panes, with explicit retention and safe fallback behavior.
+
+### Patch Changes
+
+- Updated dependencies [393783f]
+- Updated dependencies [845bb04]
+  - @narumitw/pi-tui-kit@0.63.0
+
+## 0.2.0
+
+### Minor Changes
+
+- 4b143f4: Add a /herdr menu with a persistent agent-widget toggle, status, and help. Keep the widget enabled by default and lifecycle reporting independent of visibility.
+
 ## 0.1.1
 
 ### Patch Changes

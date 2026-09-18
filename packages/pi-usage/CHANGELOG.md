@@ -1,5 +1,43 @@
 # @narumitw/pi-usage
 
+## 0.60.8
+
+### Patch Changes
+
+- 721ec0a: Accept Kimi Coding usage responses that omit `used`/`remaining` counters when the quota is untouched, deriving missing counters from `limit` instead of reporting usage as unavailable.
+
+## 0.60.7
+
+### Patch Changes
+
+- 0ece6da: Reuse pi-tui-kit's bounded frame renderer for the Usage settings screen while retaining the focused setting on short terminals.
+
+## 0.60.6
+
+### Patch Changes
+
+- 157e6f8: Show fixed English hints for documented Z.AI business error codes, with HTTP-status and unknown-code fallbacks. Use the top-level code when the nested code is absent. Stop classifying credentials from provider message text or echoing error bodies. Z.AI quota failures now retain the error statusline, request backoff, and scheduled recovery instead of being reported as unsupported. Invalidate the matching cached Z.AI report on query failure so expired backoff retries do not restore stale usage.
+
+## 0.60.5
+
+### Patch Changes
+
+- 81327a2: Report the explicit Z.AI no-GLM-Coding-Plan response as unsupported instead of publishing a usage error to the statusline. Invalidate previously cached usage when a credential becomes unsupported. Preserve query failures and scheduled retries for malformed quota responses, and omit provider error messages to avoid exposing echoed credentials.
+
+## 0.60.4
+
+### Patch Changes
+
+- 306b481: Report a Z.AI credential with no GLM Coding Plan as unsupported instead of publishing a usage error to the statusline.
+
+## 0.60.3
+
+### Patch Changes
+
+- cb85e77: Keep the Settings frame from hiding interactive rows in short terminals.
+- 96ab4db: Render the standard horizontal frame around the pi-usage Settings screen.
+- 4cf2daa: Render the usage menu with the standard horizontal frame used by other Pi extension menus.
+
 ## 0.60.2
 
 ### Patch Changes

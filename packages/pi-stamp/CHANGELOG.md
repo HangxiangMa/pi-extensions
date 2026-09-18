@@ -1,5 +1,19 @@
 # @narumitw/pi-stamp
 
+## 0.51.0
+
+### Minor Changes
+
+- c798497: Add an optional since-user cost total to final assistant stamps.
+
+## 0.50.1
+
+### Patch Changes
+
+- 5372f87: Use the dependency-free Kit terminal-text sanitizer for display labels while retaining the existing persisted metadata normalization and lazy menu boundary.
+- Updated dependencies [317f7bd]
+  - @narumitw/pi-tui-kit@0.61.0
+
 ## 0.50.0
 
 ### Minor Changes
