@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { EditorStatusWidget } from "@narumitw/pi-tui-kit/editor-status-widget";
 import { sanitizeTerminalText } from "@narumitw/pi-tui-kit/terminal-text";
 import type { HerdrAgentStatus, HerdrPane, HerdrPaneEvent, HerdrWorkspace } from "./herdr-protocol.js";
@@ -244,7 +245,7 @@ function stateSymbol(state: HerdrAgentStatus): string {
 export function createHerdrWidget(snapshot: HerdrWidgetSnapshot, theme: Theme): EditorStatusWidget {
   return new EditorStatusWidget({
     theme,
-    renderBody() {
+    renderBody(width) {
       const noun = snapshot.totalAgents === 1 ? "agent" : "agents";
       const lines = [theme.fg("muted", `Herdr · ${snapshot.totalAgents} sibling ${noun}`)];
       const separator = theme.fg("dim", " · ");
@@ -258,7 +259,7 @@ export function createHerdrWidget(snapshot: HerdrWidgetSnapshot, theme: Theme): 
       if (snapshot.hiddenAgents > 0) {
         lines.push(theme.fg("dim", `+${snapshot.hiddenAgents} more`));
       }
-      return lines;
+      return lines.map((line) => truncateToWidth(line, width, ""));
     },
   });
 }

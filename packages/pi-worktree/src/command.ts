@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { open, readFile, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -258,52 +260,115 @@ async function addFlow(
   const summary = formatAddPreview(branch, branchExists, provenance, targetPath);
   if (!(await ctx.ui.confirm("Create Git worktree", summary))) return;
 
-  assertTargetFilesystemAvailable(targetPath);
-  const latestRecords = await listWorktrees(pi, ctx.cwd, ctx.signal);
-  const latestOccupied = worktreeForBranch(latestRecords, branch);
-  if (latestOccupied) {
-    throw new Error(`Branch ${branch} is now checked out at ${latestOccupied.path}; select it again.`);
-  }
-  const latestPathCollision = latestRecords.find((record) => pathsEqual(record.path, targetPath));
-  if (latestPathCollision) {
-    throw new Error(`The target path is now registered as a worktree: ${latestPathCollision.path}. Select it again.`);
-  }
-  const branchStillExists = await localBranchExists(pi, ctx.cwd, branch, ctx.signal);
-  if (branchStillExists !== branchExists) {
-    throw new Error(`Branch ${branch} changed after confirmation; select it again.`);
-  }
-  if (branchExists) {
-    const latestOid = await resolveCommit(pi, ctx.cwd, `refs/heads/${branch}`, ctx.signal);
-    if (latestOid !== provenance.oid) {
-      throw new Error(`Branch ${branch} moved after confirmation; select it again.`);
-    }
-  }
-
-  assertTargetFilesystemAvailable(targetPath);
-  await addWorktree(pi, ctx.cwd, { path: targetPath, branch, startOid }, ctx.signal);
-  let created: WorktreeRecord;
+  const releaseLock = await acquireWorktreeCreationLock(worktreeRoot, ctx.signal);
   try {
-    const updated = await listWorktrees(pi, ctx.cwd, ctx.signal);
-    const verified = updated.find((record) => pathsEqual(record.path, targetPath));
-    if (!verified || verified.branch !== branch || verified.head !== provenance.oid) {
-      throw new Error("the expected path, branch, and approved HEAD were not present in Git porcelain output");
+    assertTargetFilesystemAvailable(targetPath);
+    const latestRecords = await listWorktrees(pi, ctx.cwd, ctx.signal);
+    const latestOccupied = worktreeForBranch(latestRecords, branch);
+    if (latestOccupied) {
+      throw new Error(`Branch ${branch} is now checked out at ${latestOccupied.path}; select it again.`);
     }
-    created = verified;
-  } catch (error) {
-    throw new Error(
-      `Git add completed, so the worktree was retained at ${targetPath}, but verification failed: ${formatError(error)}. Inspect git worktree list before retrying.`,
-    );
-  }
-  safeNotify(ctx, `Created worktree ${targetPath} on branch ${branch}.`, "info");
+    const latestPathCollision = latestRecords.find((record) => pathsEqual(record.path, targetPath));
+    if (latestPathCollision) {
+      throw new Error(`The target path is now registered as a worktree: ${latestPathCollision.path}. Select it again.`);
+    }
+    const branchStillExists = await localBranchExists(pi, ctx.cwd, branch, ctx.signal);
+    if (branchStillExists !== branchExists) {
+      throw new Error(`Branch ${branch} changed after confirmation; select it again.`);
+    }
+    if (branchExists) {
+      const latestOid = await resolveCommit(pi, ctx.cwd, `refs/heads/${branch}`, ctx.signal);
+      if (latestOid !== provenance.oid) {
+        throw new Error(`Branch ${branch} moved after confirmation; select it again.`);
+      }
+    }
 
-  if (
-    await ctx.ui.confirm("Switch Pi workspace?", stripTerminalControls(`Continue this conversation in ${targetPath}?`))
-  ) {
-    const latest = await revalidateWorktreeIdentity(pi, ctx, created);
-    if (latest.prunableReason !== undefined || !existsSync(latest.path)) {
-      throw new Error("The newly created worktree became unavailable; select it again.");
+    assertTargetFilesystemAvailable(targetPath);
+    await addWorktree(pi, ctx.cwd, { path: targetPath, branch, startOid }, ctx.signal);
+    let created: WorktreeRecord;
+    try {
+      const updated = await listWorktrees(pi, ctx.cwd, ctx.signal);
+      const verified = updated.find((record) => pathsEqual(record.path, targetPath));
+      if (!verified || verified.branch !== branch || verified.head !== provenance.oid) {
+        throw new Error("the expected path, branch, and approved HEAD were not present in Git porcelain output");
+      }
+      created = verified;
+    } catch (error) {
+      throw new Error(
+        `Git add completed, so the worktree was retained at ${targetPath}, but verification failed: ${formatError(error)}. Inspect git worktree list before retrying.`,
+      );
     }
-    await switchToWorktree(ctx, latest.path);
+    safeNotify(ctx, `Created worktree ${targetPath} on branch ${branch}.`, "info");
+
+    if (
+      await ctx.ui.confirm(
+        "Switch Pi workspace?",
+        stripTerminalControls(`Continue this conversation in ${targetPath}?`),
+      )
+    ) {
+      const latest = await revalidateWorktreeIdentity(pi, ctx, created);
+      if (latest.prunableReason !== undefined || !existsSync(latest.path)) {
+        throw new Error("The newly created worktree became unavailable; select it again.");
+      }
+      await switchToWorktree(ctx, latest.path);
+    }
+  } finally {
+    await releaseLock();
+  }
+}
+
+interface WorktreeCreationLock {
+  pid: number;
+  token: string;
+}
+
+async function acquireWorktreeCreationLock(root: string, signal?: AbortSignal): Promise<() => Promise<void>> {
+  const lockPath = `${resolve(root)}.pi-worktree.lock`;
+  const token = randomUUID();
+  const owner: WorktreeCreationLock = { pid: process.pid, token };
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (signal?.aborted) throw new DOMException("Worktree creation cancelled", "AbortError");
+    try {
+      const handle = await open(lockPath, "wx", 0o600);
+      await handle.writeFile(JSON.stringify(owner));
+      await handle.close();
+      return async () => {
+        try {
+          const current = JSON.parse(await readFile(lockPath, "utf8")) as Partial<WorktreeCreationLock>;
+          if (current.pid === owner.pid && current.token === owner.token) await unlink(lockPath);
+        } catch {
+          // The lock was already removed or is no longer ours.
+        }
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let current: Partial<WorktreeCreationLock> | undefined;
+      try {
+        current = JSON.parse(await readFile(lockPath, "utf8")) as Partial<WorktreeCreationLock>;
+      } catch {
+        // An incomplete owner record is not provably stale; keep waiting.
+      }
+      if (current?.pid && !processIsAlive(current.pid)) {
+        try {
+          const latest = JSON.parse(await readFile(lockPath, "utf8")) as Partial<WorktreeCreationLock>;
+          if (latest.pid === current.pid && latest.token === current.token) await unlink(lockPath);
+        } catch {
+          // Another creator won the race; retry normally.
+        }
+        continue;
+      }
+      await new Promise<void>((r) => setTimeout(r, 50));
+    }
+  }
+  throw new Error(`Timed out waiting for worktree creation lock ${lockPath}.`);
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
 

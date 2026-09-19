@@ -406,7 +406,7 @@ export async function registerFileQuoteExtension(
       }
       const interaction = await runCustomInteraction<FileQuoteExplorerResult | undefined, ExtensionContext>(ctx, {
         signal: flowSignal,
-        isCurrent: () => isCurrentSession(owner, generation),
+        isCurrent: () => isCurrentSession(owner, generation) && !flowSignal.aborted,
         onError: () => {},
         create: ({ tui, theme, keybindings, signal: interactionSignal, complete }) => {
           const component = new FileQuoteExplorer({
