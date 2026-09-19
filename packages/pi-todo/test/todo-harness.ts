@@ -99,7 +99,10 @@ export function createContext(
   }> = [];
   const notifications: Array<{ message: string; type: string | undefined }> = [];
   const branch = options.branch ?? [];
-  const tui = { terminal: { rows: options.terminalRows ?? 36 } } as unknown as TUI;
+  const tui = {
+    terminal: { rows: options.terminalRows ?? 36 },
+    requestRender() {},
+  } as unknown as TUI;
   const sessionManager = {
     getBranch: () => branch,
   } as unknown as ExtensionContext["sessionManager"];

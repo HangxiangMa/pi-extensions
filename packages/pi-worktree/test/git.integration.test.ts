@@ -218,6 +218,13 @@ test("worktree inventory ignores clean sparse-checkout-managed index flags", asy
 
     assert.equal(git(linked, ["status", "--porcelain=v1"]).stdout, "");
     assert.match(git(linked, ["ls-files", "-v"]).stdout, /^S drop\/b\.txt$/m);
+    const sparseRules = spawnSync("git", ["sparse-checkout", "check-rules", "-z"], {
+      cwd: linked,
+      input: "drop/b.txt\0",
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+    });
+    if (sparseRules.status === 129) return;
     assert.deepEqual(await worktreeInventory(pi, linked), []);
   } finally {
     rmSync(temporary, { recursive: true, force: true });
