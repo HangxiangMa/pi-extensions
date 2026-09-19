@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { KeyId } from "@earendil-works/pi-tui";
@@ -268,16 +268,45 @@ async function publishSettings(
   await mkdir(directory, { recursive: true });
   options.signal?.throwIfAborted();
   const temporaryPath = join(directory, `.${basename(settingsPath)}.${process.pid}.${randomUUID()}.tmp`);
+  let targetMode = 0o600;
   try {
-    await writeFile(temporaryPath, contents, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-      signal: options.signal,
+    const existing = await lstat(settingsPath).catch((error: unknown) => {
+      if (isNodeError(error) && error.code === "ENOENT") return undefined;
+      throw error;
     });
+    if (existing) {
+      if (!existing.isFile()) throw new Error("settings path is not a regular file");
+      targetMode = existing.mode & 0o777;
+    }
+    const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
+    const handle = await open(temporaryPath, flags, 0o600);
+    try {
+      await handle.writeFile(contents, { encoding: "utf8", signal: options.signal });
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    if (targetMode !== 0o600) await chmod(temporaryPath, targetMode);
     await options.beforeRename?.(temporaryPath, settingsPath);
     options.signal?.throwIfAborted();
+    const beforeRename = await lstat(settingsPath).catch((error: unknown) => {
+      if (isNodeError(error) && error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (beforeRename && !beforeRename.isFile()) throw new Error("settings path is not a regular file");
     await rename(temporaryPath, settingsPath);
+    const published = await lstat(settingsPath);
+    if (!published.isFile()) throw new Error("published settings path is not a regular file");
+    try {
+      const directoryHandle = await open(directory, constants.O_RDONLY);
+      try {
+        await directoryHandle.sync();
+      } finally {
+        await directoryHandle.close();
+      }
+    } catch (error: unknown) {
+      if (!isNodeError(error) || !["EINVAL", "ENOTSUP", "EISDIR"].includes(error.code ?? "")) throw error;
+    }
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => undefined);
   }
