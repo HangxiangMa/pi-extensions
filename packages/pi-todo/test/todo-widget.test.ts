@@ -39,6 +39,7 @@ test("registers the todos-by-step schema and concise maintenance guidance", () =
     "Use blocked with a concise reason only when progress depends on an external action or condition; blocked does not mean completed.",
     "Before a progress report or final response, call update_todo_list to reconcile every todo with actual work; do not report completion while the list is stale.",
     "On every update_todo_list call, send the complete current todos array, keep at most one todo in_progress, and send an empty array when no tracked work remains.",
+    "Give each TODO a stable id when it has execution tasks; create tasks with that todoId. TODO owns the parent lifecycle; tasks only execute and report child work.",
   ]);
 
   const parameters = tool.parameters as {
@@ -53,7 +54,7 @@ test("registers the todos-by-step schema and concise maintenance guidance", () =
   };
   assert.equal(todosSchema.maxItems, 50);
   assert.deepEqual(todosSchema.items?.required, ["step", "status"]);
-  assert.deepEqual(Object.keys(todosSchema.items?.properties ?? {}), ["step", "status", "reason"]);
+  assert.deepEqual(Object.keys(todosSchema.items?.properties ?? {}), ["id", "step", "status", "reason"]);
   assert.deepEqual(todosSchema.items?.properties?.step, {
     description: "A concise, action-oriented step",
     type: "string",

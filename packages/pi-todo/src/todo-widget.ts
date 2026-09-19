@@ -36,6 +36,8 @@ type TodoStatus = (typeof TODO_STATUSES)[number];
 type PreviousTodoStatus = (typeof PREVIOUS_TODO_STATUSES)[number];
 
 export interface Todo {
+  /** Stable parent identity used by execution tasks to link back to this item. */
+  id?: string;
   step: string;
   status: TodoStatus;
   reason?: string;
@@ -65,6 +67,7 @@ export interface TodoWidgetDependencies {
 const TodoParameters = Type.Object({
   todos: Type.Array(
     Type.Object({
+      id: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
       step: Type.String({
         minLength: 1,
         maxLength: MAX_TODO_STEP_LENGTH,
@@ -193,6 +196,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
       "Use blocked with a concise reason only when progress depends on an external action or condition; blocked does not mean completed.",
       "Before a progress report or final response, call update_todo_list to reconcile every todo with actual work; do not report completion while the list is stale.",
       "On every update_todo_list call, send the complete current todos array, keep at most one todo in_progress, and send an empty array when no tracked work remains.",
+      "Give each TODO a stable id when it has execution tasks; create tasks with that todoId. TODO owns the parent lifecycle; tasks only execute and report child work.",
     ],
     parameters: TodoParameters,
     prepareArguments: validateTodoArguments,
@@ -206,6 +210,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
       cancelCompletionSummary();
       completionSummaryHidden = false;
       todos = cloneTodos(nextTodos);
+      pi.events?.emit("todo:updated", { todos: cloneTodos(todos) });
       const becameComplete = todos.length > 0 && allTodosCompleted(todos) && !wasComplete;
       if (becameComplete) publishCompletionSummary(ctx);
       else publish(ctx);
@@ -254,6 +259,7 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
     completionSummaryHidden = false;
     settings = cloneDefaultSettings();
     restoreBranchState(ctx);
+    pi.events?.emit("todo:updated", { todos: cloneTodos(todos) });
     completionSummaryHidden = allTodosCompleted(todos);
     if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined);
     widgetRequestRender = undefined;
@@ -373,6 +379,7 @@ export function validateTodoArguments(value: unknown): { todos: Todo[] } {
   }
 
   const todos: Todo[] = [];
+  const ids = new Set<string>();
   const inProgressIndices: number[] = [];
   for (const [index, entry] of value.todos.entries()) {
     const item = index + 1;
@@ -387,6 +394,12 @@ export function validateTodoArguments(value: unknown): { todos: Todo[] } {
     if (!TODO_STATUSES.includes(entry.status as TodoStatus)) {
       rejectTodos(`item ${item} status must be pending, in_progress, completed, or blocked.`);
     }
+    if (entry.id !== undefined) {
+      if (typeof entry.id !== "string" || entry.id.trim().length === 0)
+        rejectTodos(`item ${item} id must be a non-empty string.`);
+      if (ids.has(entry.id)) rejectTodos(`item ${item} id duplicates an earlier todo.`);
+      ids.add(entry.id);
+    }
     const status = entry.status as TodoStatus;
     if (status === "in_progress") inProgressIndices.push(item);
 
@@ -397,13 +410,18 @@ export function validateTodoArguments(value: unknown): { todos: Todo[] } {
       if (!hasMaxGraphemeLength(entry.reason, MAX_TODO_REASON_LENGTH)) {
         rejectTodos(`item ${item} reason exceeds ${MAX_TODO_REASON_LENGTH} characters.`);
       }
-      todos.push({ step: entry.step, status, reason: entry.reason });
+      todos.push({
+        ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+        step: entry.step,
+        status,
+        reason: entry.reason,
+      });
       continue;
     }
     // `reason` is meaningful only for blocked todos. Drop it from every other
     // status instead of rejecting the complete update; some model/tool bridges
     // incorrectly send optional fields on every item.
-    todos.push({ step: entry.step, status });
+    todos.push({ ...(typeof entry.id === "string" ? { id: entry.id } : {}), step: entry.step, status });
   }
 
   if (inProgressIndices.length > 1) {
@@ -622,6 +640,7 @@ function isTodos(value: unknown): value is Todo[] {
   for (const entry of value) {
     if (!isRecord(entry)) return false;
     if (
+      (entry.id !== undefined && (typeof entry.id !== "string" || entry.id.length === 0)) ||
       typeof entry.step !== "string" ||
       entry.step.trim().length === 0 ||
       !hasMaxGraphemeLength(entry.step, MAX_TODO_STEP_LENGTH) ||
@@ -677,6 +696,7 @@ function todosEqual(left: readonly Todo[], right: readonly Todo[]): boolean {
     left.length === right.length &&
     left.every(
       (todo, index) =>
+        (todo.id === undefined || right[index]?.id === undefined || todo.id === right[index]?.id) &&
         todo.step === right[index]?.step &&
         todo.status === right[index]?.status &&
         todo.reason === right[index]?.reason,
@@ -694,6 +714,7 @@ function migrateLegacyItems(items: readonly LegacyTodoItem[]): Todo[] {
 
 function cloneTodos(todos: readonly Todo[]): Todo[] {
   return todos.map((todo) => ({
+    ...(todo.id === undefined ? {} : { id: todo.id }),
     step: todo.step,
     status: todo.status,
     ...(todo.reason === undefined ? {} : { reason: todo.reason }),
