@@ -63,7 +63,8 @@ export function parseWorktreePorcelain(output: string): WorktreeRecord[] {
     current = undefined;
   };
 
-  for (const field of output.split("\0")) {
+  const fields = output.includes("\0") ? output.split("\0") : output.split(/\r?\n/u);
+  for (const field of fields) {
     if (field === "") {
       finish();
       continue;
@@ -190,7 +191,18 @@ export async function listWorktrees(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<WorktreeRecord[]> {
-  const result = await runGit(pi, ["worktree", "list", "--porcelain", "-z"], cwd, signal);
+  const args = ["worktree", "list", "--porcelain", "-z"];
+  let result = await runGitAllowFailure(pi, args, cwd, signal);
+  if (result.code !== 0 && /unknown switch [`']z/u.test(result.stderr)) {
+    const fallbackArgs = ["worktree", "list", "--porcelain"];
+    result = await runGitAllowFailure(pi, fallbackArgs, cwd, signal);
+    if (result.killed) throw killedError(fallbackArgs);
+    if (result.code !== 0) throw gitFailure(fallbackArgs, result);
+  } else if (result.killed) {
+    throw killedError(args);
+  } else if (result.code !== 0) {
+    throw gitFailure(args, result);
+  }
   return parseWorktreePorcelain(result.stdout);
 }
 

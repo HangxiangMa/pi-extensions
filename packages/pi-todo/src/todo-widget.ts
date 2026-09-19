@@ -308,7 +308,6 @@ export default function todoWidgetExtension(pi: ExtensionAPI, dependencies: Todo
     cancelCompletionSummary();
     completionSummaryHidden = false;
     restoreBranchState(ctx);
-    completionSummaryHidden = allTodosCompleted(todos);
     publish(ctx);
   });
 

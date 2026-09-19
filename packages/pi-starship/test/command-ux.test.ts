@@ -482,10 +482,11 @@ test("Configuration combines state, source, path, health, and diagnostics", asyn
     tui.press("tui.select.confirm");
     await tui.waitForOpen();
     const frame = tui.render().join("\n");
-    assert.match(frame, /Configuration/u);
+    const unwrappedFrame = frame.replaceAll("\n", "");
+    assert.match(unwrappedFrame, /Configuration/u);
     assert.match(frame, /State: Custom configuration/u);
     assert.match(frame, /Source: User file/u);
-    assert.match(frame, /Path:[\s\S]*pi-starship\.toml/u);
+    assert.match(unwrappedFrame, /Path:[\s\S]*pi-starship\.toml/u);
     assert.match(frame, /Health: 1 warning/u);
     assert.match(frame, /future/u);
     tui.press("ctrl+c");
