@@ -17,6 +17,7 @@
       "./packages/pi-chat/src/index.ts",
       "./packages/pi-chrome-devtools/src/index.ts",
       "./packages/pi-codex-compact/src/index.ts",
+      "./packages/pi-context-management/src/index.ts",
       "./packages/pi-dotenv/src/index.ts",
       "./packages/pi-file-context/src/index.ts",
       "./packages/pi-firecrawl/src/index.ts",
@@ -24,6 +25,7 @@
       "./packages/pi-github-pr/src/index.ts",
       "./packages/pi-goal/src/index.ts",
       "./packages/pi-herdr/src/index.ts",
+      "./packages/pi-typesafe-search/src/index.ts",
       "./packages/pi-langfuse/src/index.ts",
       "./packages/pi-lsp/src/index.ts",
       "./packages/pi-plan-mode/src/index.ts",
@@ -37,12 +39,15 @@
       "./packages/pi-todo/src/index.ts",
       "./packages/pi-tool/src/index.ts",
       "./packages/pi-tui-kit-showcase/src/index.ts",
+      "./packages/pi-typesafe/src/index.ts",
+      "./packages/pi-typesafe-compact/src/index.ts",
       "./packages/pi-usage/src/index.ts",
       "./packages/pi-worktree/src/index.ts"
     ],
     "skills": [
       "./packages/pi-herdr/skills",
-      "./packages/pi-starship/skills"
+      "./packages/pi-starship/skills",
+      "./packages/pi-typesafe/skills"
     ]
   },
   "scripts": {
@@ -78,21 +83,21 @@
     "publish-packages:sequential": "node ./scripts/publish-packages-sequentially.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.13",
-    "@changesets/cli": "3.0.2",
+    "@biomejs/biome": "2.5.14",
+    "@changesets/cli": "3.0.3",
     "@earendil-works/pi-agent-core": "0.85.1",
     "@earendil-works/pi-ai": "0.85.1",
     "@earendil-works/pi-coding-agent": "0.85.1",
     "@earendil-works/pi-server": "0.85.1",
     "@earendil-works/pi-tui": "0.85.1",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.6.2",
     "concurrently": "^10.0.5",
     "husky": "9.1.7",
     "npm-check-updates": "23.1.0",
     "semver": "7.8.5",
-    "typebox": "^1.3.30",
+    "typebox": "^1.3.34",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   },
   "overrides": {
     "brace-expansion": "5.0.9",
