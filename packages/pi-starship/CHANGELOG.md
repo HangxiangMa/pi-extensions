@@ -1,5 +1,29 @@
 # @narumitw/pi-starship
 
+## 0.58.0
+
+### Minor Changes
+
+- ba40826: Allow per-status colors in `extension_status.styles` using exact Pi status keys, explicit namespace wildcards, and an optional fallback style.
+
+## 0.57.0
+
+### Minor Changes
+
+- 229ebe9: Show raw Pi model IDs by default. Add `model.shorten_model = true` to opt in to shortening, without changing `gpt-` to `gpt `.
+
+## 0.56.3
+
+### Patch Changes
+
+- 8abd5b7: Keep generated extension runtime graphs inside Pi's Jiti-loaded TypeScript path to avoid duplicate peer-runtime evaluation during startup. Add measured generated runtimes for Context Management, Herdr, and TypeSafe Search.
+
+## 0.56.2
+
+### Patch Changes
+
+- 67a3049: Adapt provider, transcript, usage, deferred-tool, and telemetry behavior to Pi's current runtime contracts, including accurate cache-warming accounting and exclusion from ordinary generation traces.
+
 ## 0.56.1
 
 ### Patch Changes

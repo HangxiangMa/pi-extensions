@@ -86,6 +86,13 @@ export interface AssistantMessageStampDataV6 {
   costSinceUser: number;
 }
 
+export interface AssistantMessageStampDataV7 extends Omit<AssistantMessageStampDataV6, "version" | "costSinceUser"> {
+  version: 7;
+  completedAt: number;
+  timeSinceUserMs: number;
+  costSinceUser?: number;
+}
+
 export interface ToolStampDataV1 {
   version: 1;
   kind: "tool";
@@ -102,7 +109,8 @@ export type MessageStampData =
   | AssistantMessageStampDataV3
   | AssistantMessageStampDataV4
   | AssistantMessageStampDataV5
-  | AssistantMessageStampDataV6;
+  | AssistantMessageStampDataV6
+  | AssistantMessageStampDataV7;
 export type StampEntryData = MessageStampData | ToolStampDataV1;
 
 export interface StampExtensionOptions {
@@ -117,6 +125,7 @@ interface AssistantTimingObservation {
 
 interface FinalizedAssistantTiming extends AssistantTimingObservation {
   completedAt: number;
+  timeSinceUserMs?: number;
 }
 
 interface CostSinceUserAccumulator {
@@ -166,7 +175,7 @@ export function isMessageStampData(value: unknown): value is MessageStampData {
           value.firstContentAt <= value.completedAt))
     );
   }
-  if (value.version === 6) {
+  if (value.version === 6 || value.version === 7) {
     return (
       value.role === "assistant" &&
       hasOnlyKeys(value, [
@@ -180,12 +189,20 @@ export function isMessageStampData(value: unknown): value is MessageStampData {
         "thinkingLevel",
         "estimatedCost",
         "costSinceUser",
+        ...(value.version === 7 ? ["timeSinceUserMs"] : []),
       ]) &&
+      (value.version !== 7 ||
+        (isValidTimestamp(value.completedAt) &&
+          typeof value.timeSinceUserMs === "number" &&
+          Number.isFinite(value.timeSinceUserMs) &&
+          value.timeSinceUserMs >= 0)) &&
       (!Object.hasOwn(value, "metadata") || isAssistantMetadataData(value.metadata)) &&
       (!Object.hasOwn(value, "thinkingLevel") || isStampThinkingLevel(value.thinkingLevel)) &&
-      isAssistantEstimatedCost(value.costSinceUser) &&
-      (!Object.hasOwn(value, "estimatedCost") ||
-        (isAssistantEstimatedCost(value.estimatedCost) && value.estimatedCost <= value.costSinceUser)) &&
+      (Object.hasOwn(value, "costSinceUser")
+        ? isAssistantEstimatedCost(value.costSinceUser) &&
+          (!Object.hasOwn(value, "estimatedCost") ||
+            (isAssistantEstimatedCost(value.estimatedCost) && value.estimatedCost <= value.costSinceUser))
+        : value.version === 7 && !Object.hasOwn(value, "estimatedCost")) &&
       hasValidOptionalAssistantTiming(value, value.timestamp)
     );
   }
@@ -255,10 +272,11 @@ export function createStampEntryRenderer(getSettings: () => Readonly<StampSettin
     const data = entry.data;
     return dynamicRightAlignedText(
       memoizeStampLines(getSettings, (settings) => {
-        const hasAssistantTiming = data.version === 3 || data.version === 4 || data.version === 5 || data.version === 6;
+        const hasAssistantTiming = data.version !== 1 && data.version !== 2;
         const label = formatMessageStampLabel(
           {
             timestamp: data.timestamp,
+            ...(data.version === 7 ? { timeSinceUserMs: data.timeSinceUserMs } : {}),
             ...(data.version === 1 ? {} : { previousTimestamp: data.previousTimestamp }),
             ...(hasAssistantTiming
               ? {
@@ -280,16 +298,18 @@ export function createStampEntryRenderer(getSettings: () => Readonly<StampSettin
         const timelineLines =
           options.expanded && settings.showExactTimeline ? exactTimelineLines(timelineObservations) : [];
         const metadataLines =
-          data.version === 4 || data.version === 5 || data.version === 6
+          data.version === 4 || data.version === 5 || data.version === 6 || data.version === 7
             ? formatAssistantMetadataLines(
                 data.metadata,
                 settings.assistantMetadata,
                 options.expanded,
-                (data.version === 5 || data.version === 6) && settings.showThinkingLevel
+                (data.version === 5 || data.version === 6 || data.version === 7) && settings.showThinkingLevel
                   ? data.thinkingLevel
                   : undefined,
                 settings.showCompactAbnormalOutcome,
-                data.version === 6 && settings.showCostSinceUser
+                (data.version === 6 || data.version === 7) &&
+                  data.costSinceUser !== undefined &&
+                  settings.showCostSinceUser
                   ? {
                       ...(data.estimatedCost === undefined ? {} : { estimatedCost: data.estimatedCost }),
                       costSinceUser: data.costSinceUser,
@@ -354,6 +374,7 @@ function haveSameStampSettings(left: Readonly<StampSettings>, right: Readonly<St
     left.showThinkingLevel === right.showThinkingLevel &&
     left.showCompactAbnormalOutcome === right.showCompactAbnormalOutcome &&
     left.showCostSinceUser === right.showCostSinceUser &&
+    left.showTimeSinceUser === right.showTimeSinceUser &&
     left.toolStamps === right.toolStamps
   );
 }
@@ -437,6 +458,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
   let finalizedAssistantTiming: FinalizedAssistantTiming | undefined;
   let activeThinkingLevel: StampThinkingLevel | undefined;
   let costSinceUser = emptyCostSinceUserAccumulator();
+  let nextUsageEntryIndex = 0;
   const activeToolTimings = new Map<string, ToolTimingObservation>();
   const pendingUserStamps: Array<{ role: "user"; timestamp: number }> = [];
 
@@ -485,14 +507,14 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     message: unknown,
     thinkingLevel: StampThinkingLevel | undefined,
     costSinceUserData: AssistantCostSinceUserData | undefined,
+    timeSinceUserMs: number | undefined,
   ): void => {
     const matchingTiming = timing?.timestamp === timestamp ? timing : undefined;
     const metadata =
       settingsRuntime.get().settings.assistantMetadata === "off" ? undefined : captureAssistantMetadata(message);
-    if (costSinceUserData) {
-      const stamp: AssistantMessageStampDataV6 = {
-        version: 6,
-        role: "assistant",
+    if (costSinceUserData || timeSinceUserMs !== undefined) {
+      const common = {
+        role: "assistant" as const,
         timestamp,
         ...(lastStampTimestamp === undefined ? {} : { previousTimestamp: lastStampTimestamp }),
         ...(matchingTiming
@@ -503,11 +525,21 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
           : {}),
         ...(metadata === undefined ? {} : { metadata }),
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-        ...(costSinceUserData.estimatedCost === undefined ? {} : { estimatedCost: costSinceUserData.estimatedCost }),
-        costSinceUser: costSinceUserData.costSinceUser,
       };
+      let stamp: AssistantMessageStampDataV6 | AssistantMessageStampDataV7 | undefined;
+      if (timeSinceUserMs !== undefined && matchingTiming) {
+        stamp = {
+          ...common,
+          version: 7,
+          completedAt: matchingTiming.completedAt,
+          timeSinceUserMs,
+          ...costSinceUserData,
+        };
+      } else if (costSinceUserData) {
+        stamp = { ...common, version: 6, ...costSinceUserData };
+      }
       if (isMessageStampData(stamp)) {
-        pi.appendEntry<AssistantMessageStampDataV6>(STAMP_ENTRY_TYPE, stamp);
+        pi.appendEntry<MessageStampData>(STAMP_ENTRY_TYPE, stamp);
         lastStampTimestamp = timestamp;
         return;
       }
@@ -626,6 +658,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     const branch = ctx.sessionManager.getBranch();
     lastStampTimestamp = lastStampTimestampFromBranch(branch);
     costSinceUser = costSinceUserFromBranch(branch);
+    nextUsageEntryIndex = branch.length;
     try {
       const state = await settingsRuntime.reload(controller.signal);
       if (controller.signal.aborted || currentGeneration !== generation || controller !== sessionController) {
@@ -713,10 +746,12 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     if (isValidTimestamp(firstContentAt)) activeAssistantTiming.firstContentAt = firstContentAt;
   });
 
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     if (!tuiSessionActive) return;
     if (event.message.role === "user") {
       costSinceUser = emptyCostSinceUserAccumulator();
+      // Pi appends the user entry after this hook, so start at the current branch tail.
+      nextUsageEntryIndex = ctx.sessionManager.getBranch().length;
       if (isValidTimestamp(event.message.timestamp)) {
         pendingUserStamps.push({ role: "user", timestamp: event.message.timestamp });
       }
@@ -736,38 +771,53 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
       activeAssistantTiming.firstContentAt <= completedAt
         ? activeAssistantTiming.firstContentAt
         : undefined;
+    // Read the raw active branch, not compacted model context or an abandoned tree path.
+    // Pi has already persisted prior user messages by this assistant completion boundary.
+    const timeSinceUserMs = settingsRuntime.get().settings.showTimeSinceUser
+      ? elapsedSinceUser(ctx.sessionManager.getBranch(), completedAt)
+      : undefined;
     finalizedAssistantTiming = {
       timestamp: event.message.timestamp,
       completedAt,
       ...(firstContentAt === undefined ? {} : { firstContentAt }),
+      ...(timeSinceUserMs === undefined ? {} : { timeSinceUserMs }),
     };
     activeAssistantTiming = undefined;
   });
 
-  pi.on("turn_end", (event) => {
+  pi.on("turn_end", (event, ctx) => {
     const timing = finalizedAssistantTiming;
     const thinkingLevel = activeThinkingLevel;
     activeAssistantTiming = undefined;
     finalizedAssistantTiming = undefined;
     activeThinkingLevel = undefined;
     if (tuiSessionActive && event.message.role === "assistant") {
+      const branch = ctx.sessionManager.getBranch();
+      nextUsageEntryIndex = addNewUsageCosts(branch, nextUsageEntryIndex, costSinceUser);
       const estimatedCost = captureReportedCost(event.message);
       addReportedCostSinceUser(costSinceUser, estimatedCost);
       for (const toolResult of event.toolResults) {
         addReportedCostSinceUser(costSinceUser, captureReportedCost(toolResult));
       }
       const settings = settingsRuntime.get().settings;
+      const isNonToolUseResponse = event.message.stopReason !== "toolUse";
       const costSinceUserData =
-        settings.showCostSinceUser &&
-        event.message.stopReason !== "toolUse" &&
-        costSinceUser.valid &&
-        costSinceUser.hasReportedCost
+        settings.showCostSinceUser && isNonToolUseResponse && costSinceUser.valid && costSinceUser.hasReportedCost
           ? {
               ...(estimatedCost === undefined ? {} : { estimatedCost }),
               costSinceUser: costSinceUser.total,
             }
           : undefined;
-      appendAssistantStamp(event.message.timestamp, timing, event.message, thinkingLevel, costSinceUserData);
+      const timeSinceUserMs =
+        isNonToolUseResponse && timing?.timestamp === event.message.timestamp ? timing.timeSinceUserMs : undefined;
+      appendAssistantStamp(
+        event.message.timestamp,
+        timing,
+        event.message,
+        thinkingLevel,
+        costSinceUserData,
+        timeSinceUserMs,
+      );
     }
     flushToolStamps(event.toolResults);
   });
@@ -792,6 +842,7 @@ export default function stampExtension(pi: ExtensionAPI, options: StampExtension
     tuiSessionActive = false;
     lastStampTimestamp = undefined;
     costSinceUser = emptyCostSinceUserAccumulator();
+    nextUsageEntryIndex = 0;
     await settingsRuntime.flush();
   });
 }
@@ -824,12 +875,44 @@ function costSinceUserFromBranch(entries: readonly unknown[]): CostSinceUserAccu
   const accumulator = emptyCostSinceUserAccumulator();
   for (let index = costSinceUserStart; index < entries.length; index += 1) {
     const entry = entries[index];
-    if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message)) continue;
+    if (!isRecord(entry)) continue;
+    if (entry.type === "usage") {
+      addReportedCostSinceUser(accumulator, captureReportedCost(entry));
+      continue;
+    }
+    if (entry.type !== "message" || !isRecord(entry.message)) continue;
     if (entry.message.role === "assistant" || entry.message.role === "toolResult") {
       addReportedCostSinceUser(accumulator, captureReportedCost(entry.message));
     }
   }
   return accumulator;
+}
+
+function addNewUsageCosts(
+  entries: readonly unknown[],
+  nextIndex: number,
+  accumulator: CostSinceUserAccumulator,
+): number {
+  const start = Math.min(nextIndex, entries.length);
+  for (let index = start; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (isRecord(entry) && entry.type === "usage") {
+      addReportedCostSinceUser(accumulator, captureReportedCost(entry));
+    }
+  }
+  return entries.length;
+}
+
+function elapsedSinceUser(entries: readonly unknown[], completedAt: number): number | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user")
+      continue;
+    const timestamp = entry.message.timestamp;
+    // An invalid latest user is still a reset boundary; never fall back to an older user.
+    return isValidTimestamp(timestamp) && timestamp <= completedAt ? completedAt - timestamp : undefined;
+  }
+  return undefined;
 }
 
 function lastStampTimestampFromBranch(entries: readonly unknown[]): number | undefined {

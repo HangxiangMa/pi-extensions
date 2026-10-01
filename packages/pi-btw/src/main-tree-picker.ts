@@ -245,6 +245,8 @@ function sanitizeEntryForDisplay(entry: SessionEntry): SessionEntry {
       return { ...entry, thinkingLevel: sanitizeSingleLine(entry.thinkingLevel) };
     case "custom":
       return { ...entry, customType: sanitizeSingleLine(entry.customType) };
+    case "context_edit":
+      return { ...entry, targetId: sanitizeSingleLine(entry.targetId) };
     case "label":
       return {
         ...entry,
@@ -254,6 +256,14 @@ function sanitizeEntryForDisplay(entry: SessionEntry): SessionEntry {
       return {
         ...entry,
         name: entry.name === undefined ? undefined : sanitizeSingleLine(entry.name),
+      };
+    case "usage":
+      return {
+        ...entry,
+        kind: sanitizeSingleLine(entry.kind),
+        provider: sanitizeSingleLine(entry.provider),
+        model: sanitizeSingleLine(entry.model),
+        note: entry.note === undefined ? undefined : sanitizeSingleLine(entry.note),
       };
   }
 }

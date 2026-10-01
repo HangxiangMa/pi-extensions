@@ -3,7 +3,14 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  Context,
+  Model,
+  SimpleStreamOptions as PiSimpleStreamOptions,
+  ProviderHeaders,
+} from "@earendil-works/pi-ai";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { createTuiHarness } from "@narumitw/pi-tui-kit/testing";
@@ -16,7 +23,13 @@ import {
   segmentsFromLineRange,
   segmentsFromTextRange,
 } from "../src/bring-to-main.js";
-import { chooseBringToMain, loadBringToMainDraft, type ResolvedBtwModel, runBtwThread } from "../src/btw.js";
+import {
+  chooseBringToMain,
+  createModelRegistryCompleteSimple,
+  loadBringToMainDraft,
+  type ResolvedBtwModel,
+  runBtwThread,
+} from "../src/btw.js";
 import {
   buildSideThreadMessages,
   completeSideQuestion,
@@ -27,6 +40,10 @@ import {
 } from "../src/side-thread.js";
 import { prepareBtwTranscriptMarkdown } from "../src/transcript-markdown.js";
 import { BtwAnsweringView, BtwTranscriptPager, formatSideTranscript } from "../src/transcript-pager.js";
+
+type SimpleStreamOptions = PiSimpleStreamOptions & {
+  transformHeaders?: (headers: ProviderHeaders) => ProviderHeaders | Promise<ProviderHeaders>;
+};
 
 function response(text: string): AssistantMessage {
   return {
@@ -46,6 +63,13 @@ function response(text: string): AssistantMessage {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   } as AssistantMessage;
+}
+
+async function applyHeaderTransform(
+  options: SimpleStreamOptions | undefined,
+  assembledHeaders: ProviderHeaders = options?.headers ?? {},
+): Promise<ProviderHeaders> {
+  return options?.transformHeaders ? options.transformHeaders(assembledHeaders) : assembledHeaders;
 }
 
 function keybindings(mapping: Record<string, string> = {}) {
@@ -705,7 +729,7 @@ test("bring-to-main scope menu propagates Ctrl+C as a side-thread close", async 
   assert.deepEqual(result, { kind: "closed" });
 });
 
-test("side-thread sends custom APIs through Pi core's effective provider", async () => {
+test("side-thread sends custom APIs through Pi core's authenticated model registry", async () => {
   initTheme("dark");
   const model = {
     provider: "synthetic-provider",
@@ -713,11 +737,7 @@ test("side-thread sends custom APIs through Pi core's effective provider", async
     api: "synthetic-custom-api",
     reasoning: false,
   } as Model<Api>;
-  const selected: ResolvedBtwModel = {
-    model,
-    auth: { apiKey: "synthetic-key", headers: { "x-test": "yes" } },
-  };
-  const providerReads: string[] = [];
+  const selected: ResolvedBtwModel = { model };
   const streamCalls: Array<{
     model: Model<Api>;
     context: Context;
@@ -744,14 +764,9 @@ test("side-thread sends custom APIs through Pi core's effective provider", async
       },
     },
     modelRegistry: {
-      getProvider(provider: string) {
-        providerReads.push(provider);
-        return {
-          streamSimple(capturedModel: Model<Api>, context: Context, options?: SimpleStreamOptions) {
-            streamCalls.push({ model: capturedModel, context, options });
-            return { result: async () => response("scoped answer") } as never;
-          },
-        };
+      streamSimple(capturedModel: Model<Api>, context: Context, options?: SimpleStreamOptions) {
+        streamCalls.push({ model: capturedModel, context, options });
+        return { result: async () => response("scoped answer") } as never;
       },
     },
     sessionManager: { getBranch: () => [] },
@@ -766,11 +781,10 @@ test("side-thread sends custom APIs through Pi core's effective provider", async
     }),
     { kind: "closed" },
   );
-  assert.deepEqual(providerReads, ["synthetic-provider"]);
   assert.equal(streamCalls.length, 1);
   assert.equal(streamCalls[0]?.model, model);
-  assert.equal(streamCalls[0]?.options?.apiKey, "synthetic-key");
-  assert.deepEqual(streamCalls[0]?.options?.headers, { "x-test": "yes" });
+  assert.equal(streamCalls[0]?.options?.apiKey, undefined);
+  assert.equal(streamCalls[0]?.options?.headers, undefined);
 });
 
 test("side-thread command loop opens the composer before the first question", async () => {
@@ -2893,7 +2907,40 @@ test("side thread forwards Pi session headers to OpenCode Go", async () => {
   assert.equal(capturedOptions?.headers?.["x-opencode-session"], "session-123");
   assert.equal(capturedOptions?.headers?.["x-opencode-client"], "pi");
   assert.equal(capturedOptions?.headers?.["x-test"], "yes");
-  assert.equal((capturedOptions as { sessionId?: unknown }).sessionId, undefined);
+  assert.equal(capturedOptions?.transformHeaders, undefined);
+  assert.equal(capturedOptions?.sessionId, thread.routingSessionId);
+  assert.notEqual(capturedOptions?.sessionId, "session-123");
+});
+
+test("side thread passes one stable routing session ID per thread, never the main session ID", async () => {
+  const captured: Array<string | undefined> = [];
+  const completeSimple = async (_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+    captured.push(options?.sessionId);
+    return response("A");
+  };
+  const model = { provider: "anthropic", id: "claude-test" } as Model<Api>;
+  const first = createSideThread("context");
+  const second = createSideThread("context");
+  for (const [thread, question] of [
+    [first, "Q1"],
+    [first, "Q2"],
+    [second, "Q3"],
+  ] as const) {
+    const result = await completeSideThreadTurn({
+      thread,
+      question,
+      model,
+      thinkingLevel: "off",
+      sessionId: "session-123",
+      completeSimple,
+    });
+    assert.equal(result.kind, "answered");
+  }
+
+  assert.match(first.routingSessionId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.deepEqual(captured, [first.routingSessionId, first.routingSessionId, second.routingSessionId]);
+  assert.notEqual(first.routingSessionId, second.routingSessionId);
+  assert.equal(captured.includes("session-123"), false);
 });
 
 test("side thread forwards Pi session headers to OpenCode Zen for parity", async () => {
@@ -2918,9 +2965,44 @@ test("side thread forwards Pi session headers to OpenCode Zen for parity", async
   });
   assert.equal(capturedOptions?.headers?.["x-opencode-session"], "session-123");
   assert.equal(capturedOptions?.headers?.["x-opencode-client"], "pi");
+  assert.equal(capturedOptions?.transformHeaders, undefined);
 });
 
-test("side thread forwards Pi session headers to custom opencode.ai hosts", async () => {
+test("side thread defers OpenCode session headers for model-registry completions", async () => {
+  const thread = createSideThread("context");
+  let capturedOptions: SimpleStreamOptions | undefined;
+  const model = {
+    provider: "opencode-go",
+    id: "mimo-v2.5",
+    baseUrl: "https://opencode.ai/zen/go/v1",
+  } as Model<Api>;
+  const completeSimple = createModelRegistryCompleteSimple({
+    streamSimple: (_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+      capturedOptions = options;
+      return { result: async () => response("A") } as never;
+    },
+  } as never);
+
+  await completeSideThreadTurn({
+    thread,
+    question: "Q",
+    model,
+    thinkingLevel: "off",
+    sessionId: "session-123",
+    completeSimple,
+  });
+
+  assert.equal(capturedOptions?.headers, undefined);
+  const headers = await applyHeaderTransform(capturedOptions, {
+    "x-provider": "yes",
+    "x-opencode-session": "resolved",
+  });
+  assert.equal(headers["x-provider"], "yes");
+  assert.equal(headers["x-opencode-session"], "resolved");
+  assert.equal(headers["x-opencode-client"], "pi");
+});
+
+test("side thread does not infer OpenCode attribution from a custom model's pre-auth URL", async () => {
   const thread = createSideThread("context");
   let capturedOptions: SimpleStreamOptions | undefined;
   const model = {
@@ -2932,7 +3014,7 @@ test("side thread forwards Pi session headers to custom opencode.ai hosts", asyn
     thread,
     question: "Q",
     model,
-    auth: { apiKey: "key" },
+    auth: { apiKey: "key", headers: { "x-test": "yes" } },
     thinkingLevel: "off",
     sessionId: "s",
     completeSimple: async (_model, _context, options) => {
@@ -2940,8 +3022,8 @@ test("side thread forwards Pi session headers to custom opencode.ai hosts", asyn
       return response("A");
     },
   });
-  assert.equal(capturedOptions?.headers?.["x-opencode-session"], "s");
-  assert.equal(capturedOptions?.headers?.["x-opencode-client"], "pi");
+  assert.deepEqual(capturedOptions?.headers, { "x-test": "yes" });
+  assert.equal(capturedOptions?.transformHeaders, undefined);
 });
 
 test("side thread leaves other providers untouched", async () => {
@@ -2966,7 +3048,6 @@ test("side thread leaves other providers untouched", async () => {
     },
   });
   assert.deepEqual(capturedOptions?.headers, { "x-test": "yes" });
-  assert.notEqual(capturedOptions?.headers, authHeaders);
   assert.deepEqual(authHeaders, { "x-test": "yes" });
 });
 
@@ -3017,6 +3098,7 @@ test("side thread still sends session headers for OpenCode provider with unparsa
   });
   assert.equal(capturedOptions?.headers?.["x-opencode-session"], "session-123");
   assert.equal(capturedOptions?.headers?.["x-opencode-client"], "pi");
+  assert.equal(capturedOptions?.transformHeaders, undefined);
 });
 
 test("side thread keeps explicit auth headers with exact-case win like Pi core", async () => {
@@ -3044,6 +3126,7 @@ test("side thread keeps explicit auth headers with exact-case win like Pi core",
   // a differently-cased explicit header coexists with the injected lowercase header.
   assert.equal(capturedOptions?.headers?.["x-opencode-session"], "session-123");
   assert.equal(capturedOptions?.headers?.["x-opencode-client"], "pi");
+  assert.equal(capturedOptions?.transformHeaders, undefined);
 });
 
 test("side thread lets exact-case explicit auth headers win", async () => {
@@ -3071,9 +3154,10 @@ test("side thread lets exact-case explicit auth headers win", async () => {
   });
   assert.equal(capturedOptions?.headers?.["x-opencode-session"], "explicit");
   assert.equal(capturedOptions?.headers?.["x-opencode-client"], "custom");
+  assert.equal(capturedOptions?.transformHeaders, undefined);
 });
 
-test("side question forwards Pi session headers without setting options.sessionId", async () => {
+test("side question forwards Pi session headers with a request-local options.sessionId", async () => {
   let capturedOptions: SimpleStreamOptions | undefined;
   const model = {
     provider: "opencode-go",
@@ -3093,5 +3177,7 @@ test("side question forwards Pi session headers without setting options.sessionI
     },
   });
   assert.equal(capturedOptions?.headers?.["x-opencode-session"], "session-123");
-  assert.equal((capturedOptions as { sessionId?: unknown }).sessionId, undefined);
+  assert.equal(capturedOptions?.transformHeaders, undefined);
+  assert.match(capturedOptions?.sessionId ?? "", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.notEqual(capturedOptions?.sessionId, "session-123");
 });

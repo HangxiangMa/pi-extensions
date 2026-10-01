@@ -1,5 +1,42 @@
 # @narumitw/pi-usage
 
+## 0.61.1
+
+### Patch Changes
+
+- 55b6a8f: Report DeepSeek balances that went slightly negative instead of failing the whole usage query.
+
+## 0.61.0
+
+### Minor Changes
+
+- d6aea79: Add a Codex statusline preference for showing used quota percentages while keeping remaining quota as the default.
+
+### Patch Changes
+
+- 89b1a87: Enable Codex Fast routing for official `gpt-6-sol` requests.
+- 56a1635: Display Kimi Coding monthly ratio quotas in usage reports and the statusline, and accept the top-level snake-case booster wallet.
+
+## 0.60.11
+
+### Patch Changes
+
+- 751a296: Start Pi sessions without waiting for account-file locks or provider activation, while preserving fail-closed authentication by gating each provider's first use, allowing compatible usage queries to await pending activation, and cancelling stale startup work.
+- Updated dependencies [e6db042]
+  - @narumitw/pi-tui-kit@0.65.1
+
+## 0.60.10
+
+### Patch Changes
+
+- 8abd5b7: Keep generated extension runtime graphs inside Pi's Jiti-loaded TypeScript path to avoid duplicate peer-runtime evaluation during startup. Add measured generated runtimes for Context Management, Herdr, and TypeSafe Search.
+
+## 0.60.9
+
+### Patch Changes
+
+- 67a3049: Adapt provider, transcript, usage, deferred-tool, and telemetry behavior to Pi's current runtime contracts, including accurate cache-warming accounting and exclusion from ordinary generation traces.
+
 ## 0.60.8
 
 ### Patch Changes

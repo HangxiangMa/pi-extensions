@@ -1,11 +1,5 @@
-import {
-  type Api,
-  clampThinkingLevel,
-  getSupportedThinkingLevels,
-  type Model,
-  type ProviderHeaders,
-} from "@earendil-works/pi-ai";
-import { BorderedLoader, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type Api, clampThinkingLevel, getSupportedThinkingLevels, type Model } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { MenuContext, RunMenuResult } from "@narumitw/pi-tui-kit";
 import {
   type BtwBringToMainSegment,
@@ -18,7 +12,9 @@ import {
   getAnsweredTurns,
   summarizeBringToMain,
 } from "./bring-to-main.js";
+import { buildConversationContext } from "./conversation-context.js";
 import { type RunBtwFullscreen, runBtwFullscreen } from "./fullscreen-ui.js";
+import { registerBtwMainThreadUpdates } from "./main-thread-updates.js";
 import { pickMainEntry } from "./main-tree-picker.js";
 import {
   type BtwCommandMenuResult,
@@ -29,6 +25,8 @@ import {
 } from "./menu.js";
 import {
   type BtwSettings,
+  effectiveBtwLayout,
+  effectiveBtwSidePaneRatio,
   effectiveFullscreenCopyOnSelect,
   effectiveRememberThinkingLevelChanges,
   parseBtwModelReference,
@@ -53,8 +51,11 @@ import {
   type TranscriptPagerAction,
 } from "./transcript-pager.js";
 
+export { buildConversationContext } from "./conversation-context.js";
 export {
+  BTW_LAYOUTS,
   BTW_SETTINGS_FILE,
+  type BtwLayout,
   type BtwSettings,
   type BtwSettingsLoadResult,
   normalizeBtwSettings,
@@ -69,23 +70,20 @@ export {
 } from "./side-thread.js";
 export { sanitizeSingleLine } from "./text.js";
 
-const MAX_CONTEXT_CHARS = 40_000;
-
 interface LoadBtwThinkingLevelOptions {
   settingsPath?: string;
   warn?: (message: string) => void;
 }
 
-type BtwModelRegistry = Pick<ExtensionCommandContext["modelRegistry"], "find" | "getApiKeyAndHeaders">;
+type BtwModelRegistry = Pick<ExtensionCommandContext["modelRegistry"], "find" | "getAvailable">;
 
-type BtwProviderRegistry = Pick<ExtensionCommandContext["modelRegistry"], "getProvider">;
+type BtwCompletionRegistry = Pick<ExtensionCommandContext["modelRegistry"], "streamSimple">;
 
-export function createModelRegistryCompleteSimple(modelRegistry: BtwProviderRegistry): CompleteSimpleFunction {
-  return async (model, context, options) => {
-    const provider = modelRegistry.getProvider(model.provider);
-    if (!provider) throw new Error(`No provider registered for model provider: ${model.provider}`);
-    return provider.streamSimple(model, context, options).result();
-  };
+export function createModelRegistryCompleteSimple(modelRegistry: BtwCompletionRegistry): CompleteSimpleFunction {
+  const completeSimple: CompleteSimpleFunction = async (model, context, options) =>
+    modelRegistry.streamSimple(model, context, options).result();
+  completeSimple.appliesRequestHeaderTransforms = true;
+  return completeSimple;
 }
 
 interface ResolveBtwModelOptions {
@@ -97,7 +95,8 @@ interface ResolveBtwModelOptions {
 
 export interface ResolvedBtwModel {
   model: Model<Api>;
-  auth: SideQuestionAuth;
+  /** @deprecated Pi resolves request authentication through modelRegistry.streamSimple(). */
+  auth?: SideQuestionAuth;
 }
 
 export interface BtwThreadState {
@@ -116,6 +115,10 @@ export async function resolveBtwModel({
   warn,
 }: ResolveBtwModelOptions): Promise<ResolvedBtwModel | undefined> {
   const reportWarning = (message: string) => warn?.(sanitizeSingleLine(message));
+  const availableModels = modelRegistry.getAvailable();
+  const isAvailable = (model: Model<Api>): boolean =>
+    availableModels.some((candidate) => candidate.provider === model.provider && candidate.id === model.id);
+
   if (settings.model) {
     const fallback = currentModel ? `${currentModel.provider}/${currentModel.id}` : "the current model";
     const reference = parseBtwModelReference(settings.model);
@@ -126,52 +129,19 @@ export async function resolveBtwModel({
     const configuredModel = modelRegistry.find(reference.provider, reference.modelId);
     if (!configuredModel) {
       reportWarning(`pi-btw model ${settings.model} was not found; falling back to ${fallback}.`);
+    } else if (isAvailable(configuredModel)) {
+      return { model: configuredModel };
     } else {
       const sameAsCurrent =
         configuredModel === currentModel ||
         (configuredModel.provider === currentModel?.provider && configuredModel.id === currentModel.id);
       const fallbackAction = sameAsCurrent ? "no distinct current model is available" : `falling back to ${fallback}`;
-      try {
-        const auth = await modelRegistry.getApiKeyAndHeaders(configuredModel);
-        if (auth.ok && hasRequestAuth(auth)) {
-          return {
-            model: auth.baseUrl ? { ...configuredModel, baseUrl: auth.baseUrl } : configuredModel,
-            auth,
-          };
-        }
-        const reason = auth.ok ? "has no request credentials" : auth.error;
-        reportWarning(`pi-btw model ${settings.model} is unavailable (${reason}); ${fallbackAction}.`);
-      } catch (error: unknown) {
-        reportWarning(`pi-btw model ${settings.model} credentials failed (${formatError(error)}); ${fallbackAction}.`);
-      }
+      reportWarning(`pi-btw model ${settings.model} is unavailable; ${fallbackAction}.`);
       if (sameAsCurrent) return undefined;
     }
   }
 
-  if (!currentModel) return undefined;
-  try {
-    const auth = await modelRegistry.getApiKeyAndHeaders(currentModel);
-    if (auth.ok && hasRequestAuth(auth)) {
-      // Direct provider streams bypass Pi's request preparation, including OAuth routing.
-      return {
-        model: auth.baseUrl ? { ...currentModel, baseUrl: auth.baseUrl } : currentModel,
-        auth,
-      };
-    }
-  } catch {
-    // The caller reports the final lack of an available model.
-  }
-  return undefined;
-}
-
-function hasRequestAuth(auth: SideQuestionAuth): boolean {
-  return Boolean(
-    auth.apiKey || providerHeadersHaveValue(auth.headers) || (auth.env && Object.keys(auth.env).length > 0),
-  );
-}
-
-function providerHeadersHaveValue(headers: ProviderHeaders | undefined): boolean {
-  return headers !== undefined && Object.values(headers).some((value) => value !== null);
+  return currentModel && isAvailable(currentModel) ? { model: currentModel } : undefined;
 }
 
 export async function loadBtwThinkingLevel(
@@ -186,7 +156,7 @@ export async function loadBtwThinkingLevel(
 
   options.warn?.(
     sanitizeSingleLine(
-      `pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id", omitted thinkingLevel for Same as main thread or thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}", boolean rememberThinkingLevelChanges, and boolean fullscreenCopyOnSelect. Using current Pi thinking level.`,
+      `pi-btw settings ignored: ${settings.reason}; expected optional model "provider/model-id", omitted thinkingLevel for Same as main thread or thinkingLevel "${BTW_THINKING_LEVELS.join('" | "')}", boolean rememberThinkingLevelChanges, boolean fullscreenCopyOnSelect, layout "fullscreen" | "left-pane" | "right-pane", and sidePaneRatio from 0.2 to 0.8. Using current Pi thinking level.`,
     ),
   );
   return currentThinkingLevel;
@@ -215,9 +185,9 @@ function notifySafely(
   }
 }
 
-// Keep this slightly-over-1,000-line command coordinator intact: its injectable menu,
-// request, resume, and delivery flows share the same thread-state and test seams;
-// settings, keybinding policy, terminal ownership, and rendering live in separate modules.
+// Keep the command coordinator intact: its injectable menu, request, resume, and
+// delivery flows share the same thread-state and test seams; settings, keybinding
+// policy, terminal ownership, and rendering live in separate modules.
 export interface BtwExtensionDependencies {
   showCommandMenu?: (
     pi: ExtensionAPI,
@@ -226,7 +196,7 @@ export interface BtwExtensionDependencies {
   ) => Promise<BtwCommandMenuResult>;
   pickMainEntry?: typeof pickMainEntry;
   loadSettings?: typeof loadSettingsForCommand;
-  resolveModel?: typeof resolveBtwModelWithLoader;
+  resolveModel?: typeof resolveBtwModelForCommand;
   runThread?: typeof runBtwThread;
   runFullscreen?: RunBtwFullscreen;
 }
@@ -235,9 +205,10 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
   const showCommandMenu = dependencies.showCommandMenu ?? showCommandMenuForBtw;
   const pickEntry = dependencies.pickMainEntry ?? pickMainEntry;
   const loadSettings = dependencies.loadSettings ?? loadSettingsForCommand;
-  const resolveModel = dependencies.resolveModel ?? resolveBtwModelWithLoader;
+  const resolveModel = dependencies.resolveModel ?? resolveBtwModelForCommand;
   const runThread = dependencies.runThread ?? runBtwThread;
   const runFullscreen = dependencies.runFullscreen ?? runBtwFullscreen;
+  const subscribeMainThreadUpdates = registerBtwMainThreadUpdates(pi);
   // Pi creates a fresh extension instance after session replacement or reload.
   const resumableThreads = new Map<string, BtwThreadState>();
   let nextThreadNumber = 1;
@@ -337,6 +308,11 @@ export default function btw(pi: ExtensionAPI, dependencies: BtwExtensionDependen
           },
           {
             copyOnSelect: effectiveFullscreenCopyOnSelect(settings),
+            layout: effectiveBtwLayout(settings),
+            sidePaneRatio: effectiveBtwSidePaneRatio(settings),
+            persistSidePaneRatio: (ratio, signal) =>
+              updateBtwSettings({ sidePaneRatio: ratio }, { signal }).then(() => undefined),
+            subscribeMainThreadUpdates: (listener) => subscribeMainThreadUpdates(ctx.sessionManager, listener),
             ...(settings.keybindings ? { keybindings: settings.keybindings } : {}),
           },
         );
@@ -377,40 +353,17 @@ type ModelResolutionOutcome =
   | { kind: "unavailable" }
   | { kind: "selected"; selected: ResolvedBtwModel };
 
-async function resolveBtwModelWithLoader(
+async function resolveBtwModelForCommand(
   settings: BtwSettings,
   ctx: ExtensionCommandContext,
 ): Promise<ModelResolutionOutcome> {
-  return ctx.ui.custom<ModelResolutionOutcome>((tui, theme, _keybindings, done) => {
-    const loader = new BorderedLoader(tui, theme, "Resolving /btw model credentials...");
-    let settled = false;
-    loader.onAbort = () => {
-      if (settled) return;
-      settled = true;
-      done({ kind: "cancelled" });
-    };
-
-    resolveBtwModel({
-      settings,
-      currentModel: ctx.model,
-      modelRegistry: ctx.modelRegistry,
-      warn: (message) => {
-        if (!settled) notifySafely(ctx, message, "warning");
-      },
-    })
-      .then((selected) => {
-        if (settled) return;
-        settled = true;
-        done(selected ? { kind: "selected", selected } : { kind: "unavailable" });
-      })
-      .catch(() => {
-        if (settled) return;
-        settled = true;
-        done({ kind: "unavailable" });
-      });
-
-    return loader;
+  const selected = await resolveBtwModel({
+    settings,
+    currentModel: ctx.model,
+    modelRegistry: ctx.modelRegistry,
+    warn: (message) => notifySafely(ctx, message, "warning"),
   });
+  return selected ? { kind: "selected", selected } : { kind: "unavailable" };
 }
 
 interface RunBtwThreadDependencies {
@@ -863,7 +816,6 @@ async function askThreadQuestion(
       question,
       model: selected.model,
       thinkingLevel,
-      auth: selected.auth,
       signal: view.signal,
       completeSimple: createModelRegistryCompleteSimple(ctx.modelRegistry),
       sessionId: readBtwSessionId(ctx),
@@ -895,77 +847,4 @@ async function showThreadComposer(
         thinking: { ...thinking, keybindings },
       }),
   );
-}
-
-type MessageContentBlock = {
-  type?: string;
-  text?: string;
-  name?: string;
-  arguments?: unknown;
-  result?: unknown;
-};
-
-type SessionMessage = {
-  role?: string;
-  content?: unknown;
-  stopReason?: string;
-};
-
-type SessionEntry = {
-  type: string;
-  message?: SessionMessage;
-};
-
-export function buildConversationContext(entries: readonly SessionEntry[]) {
-  const sections: string[] = [];
-
-  for (const entry of entries) {
-    if (entry.type !== "message" || !entry.message?.role) continue;
-
-    const role = entry.message.role;
-    if (role !== "user" && role !== "assistant") continue;
-
-    const contentLines = extractContentLines(entry.message.content);
-    if (contentLines.length === 0) continue;
-
-    const label = role === "user" ? "User" : "Assistant";
-    const status =
-      entry.message.stopReason && entry.message.stopReason !== "stop" ? ` (${entry.message.stopReason})` : "";
-    sections.push(`${label}${status}: ${contentLines.join("\n")}`);
-  }
-
-  return truncateFromStart(sections.join("\n\n"), MAX_CONTEXT_CHARS);
-}
-
-function extractContentLines(content: unknown): string[] {
-  if (typeof content === "string") return [content.trim()].filter(Boolean);
-  if (!Array.isArray(content)) return [];
-
-  const lines: string[] = [];
-  for (const part of content) {
-    if (!part || typeof part !== "object") continue;
-    const block = part as MessageContentBlock;
-    if (block.type === "text" && typeof block.text === "string") {
-      lines.push(block.text.trim());
-    } else if (block.type === "toolCall" && typeof block.name === "string") {
-      lines.push(`Tool call: ${block.name}(${formatJson(block.arguments)})`);
-    } else if (block.type === "toolResult" && typeof block.name === "string") {
-      lines.push(`Tool result from ${block.name}: ${formatJson(block.result)}`);
-    }
-  }
-  return lines.filter(Boolean);
-}
-
-function formatJson(value: unknown) {
-  if (value === undefined) return "";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function truncateFromStart(text: string, maxChars: number) {
-  if (text.length <= maxChars) return text;
-  return `[Earlier context omitted; showing the last ${maxChars} characters.]\n${text.slice(-maxChars)}`;
 }

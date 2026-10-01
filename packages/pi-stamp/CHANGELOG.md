@@ -1,5 +1,17 @@
 # @narumitw/pi-stamp
 
+## 0.52.0
+
+### Minor Changes
+
+- c045d50: Add opt-in elapsed time since the latest user message. Each non-tool-use assistant response records a fixed duration at completion, including tools and pauses, that remains unchanged across reload, resume, and tree navigation.
+
+## 0.51.2
+
+### Patch Changes
+
+- 67a3049: Adapt provider, transcript, usage, deferred-tool, and telemetry behavior to Pi's current runtime contracts, including accurate cache-warming accounting and exclusion from ordinary generation traces.
+
 ## 0.51.1
 
 ### Patch Changes

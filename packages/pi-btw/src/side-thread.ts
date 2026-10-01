@@ -1,11 +1,12 @@
+import { randomUUID } from "node:crypto";
 import type {
   Api,
   AssistantMessage,
   Context,
   Message,
   Model,
+  ModelsSimpleStreamOptions,
   ProviderHeaders,
-  SimpleStreamOptions,
   UserMessage,
 } from "@earendil-works/pi-ai";
 
@@ -19,11 +20,15 @@ export interface SideQuestionAuth {
   env?: Record<string, string>;
 }
 
-export type CompleteSimpleFunction = <TApi extends Api>(
-  model: Model<TApi>,
-  context: Context,
-  options?: SimpleStreamOptions,
-) => Promise<AssistantMessage>;
+export interface CompleteSimpleFunction {
+  <TApi extends Api>(
+    model: Model<TApi>,
+    context: Context,
+    options?: ModelsSimpleStreamOptions,
+  ): Promise<AssistantMessage>;
+  /** True when the callback applies Models-only header transforms after request-time authentication. */
+  appliesRequestHeaderTransforms?: boolean;
+}
 
 export type SideThreadTurn =
   | {
@@ -41,10 +46,15 @@ export type SideThreadTurn =
 export interface SideThread {
   conversationContext: string;
   turns: SideThreadTurn[];
+  /**
+   * Provider routing ID (`options.sessionId`) shared by this thread's turns.
+   * Kept separate from the main Pi session so side requests never share its cache or affinity lane.
+   */
+  routingSessionId: string;
 }
 
 export function createSideThread(conversationContext: string): SideThread {
-  return { conversationContext, turns: [] };
+  return { conversationContext, turns: [], routingSessionId: randomUUID() };
 }
 
 export function buildSideThreadMessages(thread: SideThread, question: string): Message[] {
@@ -72,7 +82,7 @@ export interface CompleteSideThreadTurnOptions {
   model: Model<Api>;
   question: string;
   thinkingLevel: BtwThinkingLevel;
-  auth: SideQuestionAuth;
+  auth?: SideQuestionAuth;
   signal?: AbortSignal;
   completeSimple: CompleteSimpleFunction;
   sessionId?: string;
@@ -98,7 +108,11 @@ export async function completeSideThreadTurn({
     const response = await completeSimple(
       model,
       { systemPrompt: SYSTEM_PROMPT, messages: buildSideThreadMessages(thread, question) },
-      buildStreamOptions(auth, { thinkingLevel, signal, model, sessionId }),
+      buildStreamOptions(
+        auth,
+        { thinkingLevel, signal, model, sessionId, routingSessionId: thread.routingSessionId },
+        completeSimple.appliesRequestHeaderTransforms === true,
+      ),
     );
     if (signal?.aborted || response?.stopReason === "aborted") return { kind: "aborted" };
     if (!isAssistantMessage(response)) {
@@ -125,7 +139,7 @@ export interface CompleteSideQuestionOptions {
   question: string;
   conversationContext: string;
   thinkingLevel: BtwThinkingLevel;
-  auth: SideQuestionAuth;
+  auth?: SideQuestionAuth;
   signal?: AbortSignal;
   completeSimple: CompleteSimpleFunction;
   sessionId?: string;
@@ -147,7 +161,11 @@ export async function completeSideQuestion({
       systemPrompt: SYSTEM_PROMPT,
       messages: [createUserMessage(buildUserPrompt(question, conversationContext))],
     },
-    buildStreamOptions(auth, { thinkingLevel, signal, model, sessionId }),
+    buildStreamOptions(
+      auth,
+      { thinkingLevel, signal, model, sessionId, routingSessionId: randomUUID() },
+      completeSimple.appliesRequestHeaderTransforms === true,
+    ),
   );
 }
 
@@ -194,31 +212,18 @@ function createUserMessage(text: string): UserMessage {
   };
 }
 
-// Minimal session-headers fork of Pi core provider-attribution
-// (pinned to @earendil-works/pi-coding-agent@0.85.0 src/core/provider-attribution.ts:getSessionHeaders).
+// Minimal session-header mirror of Pi core provider attribution.
 // Core does not export this helper and extensions have no SettingsManager, so only session
 // headers are mirrored here. Default attribution headers are intentionally out of scope.
-// Keep semantics bug-compatible with core: case-sensitive Object.assign, explicit auth
-// headers win on exact-case match.
-const OPENCODE_HOST = "opencode.ai";
-
-function matchesOpencodeHost(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false;
-  try {
-    return new URL(baseUrl).hostname === OPENCODE_HOST;
-  } catch {
-    return false;
-  }
-}
-
+// Request-time auth can replace a custom provider's base URL after these options are built,
+// so only canonical provider IDs are safe attribution signals. Keep merge semantics
+// bug-compatible with core: case-sensitive Object.assign, explicit request headers win on
+// exact-case match.
 function getOpencodeSessionHeaders(
-  model: Pick<Model<Api>, "provider" | "baseUrl">,
+  model: Pick<Model<Api>, "provider">,
   sessionId?: string,
 ): ProviderHeaders | undefined {
-  if (!sessionId) return undefined;
-  if (model.provider !== "opencode" && model.provider !== "opencode-go" && !matchesOpencodeHost(model.baseUrl)) {
-    return undefined;
-  }
+  if (!sessionId || (model.provider !== "opencode" && model.provider !== "opencode-go")) return undefined;
   return { "x-opencode-session": sessionId, "x-opencode-client": "pi" };
 }
 
@@ -234,21 +239,31 @@ function mergeSessionHeaders(
 interface BuildSideThreadStreamOptions {
   thinkingLevel: BtwThinkingLevel;
   signal?: AbortSignal;
-  model?: Pick<Model<Api>, "provider" | "baseUrl">;
+  model?: Pick<Model<Api>, "provider">;
+  /** Main Pi session ID, used only for OpenCode attribution headers. */
   sessionId?: string;
+  /** Side-request routing ID sent as `options.sessionId`; never the main session ID. */
+  routingSessionId: string;
 }
 
 function buildStreamOptions(
-  auth: SideQuestionAuth,
-  { thinkingLevel, signal, model, sessionId }: BuildSideThreadStreamOptions,
-): SimpleStreamOptions {
+  auth: SideQuestionAuth | undefined,
+  { thinkingLevel, signal, model, sessionId, routingSessionId }: BuildSideThreadStreamOptions,
+  applyRequestHeaderTransforms: boolean,
+): ModelsSimpleStreamOptions {
   const sessionHeaders = model ? getOpencodeSessionHeaders(model, sessionId) : undefined;
-  const options: SimpleStreamOptions = {
-    apiKey: auth.apiKey,
-    headers: mergeSessionHeaders(auth.headers, sessionHeaders),
-    env: auth.env,
+  const options: ModelsSimpleStreamOptions = {
+    apiKey: auth?.apiKey,
+    headers: applyRequestHeaderTransforms ? auth?.headers : mergeSessionHeaders(auth?.headers, sessionHeaders),
+    env: auth?.env,
     signal,
+    // Pi documents sessionId as optional, but providers use it for request routing and
+    // some provider overrides require it. Pi core also mints a fresh ID for one-off requests.
+    sessionId: routingSessionId,
   };
+  if (applyRequestHeaderTransforms && sessionHeaders) {
+    options.transformHeaders = (headers) => mergeSessionHeaders(headers, sessionHeaders) ?? {};
+  }
   if (thinkingLevel !== "off") options.reasoning = thinkingLevel;
   return options;
 }

@@ -14,7 +14,7 @@ xAI OAuth subscription reporting follows the reviewed Grok Build contract and ru
 - Redeems eligible Codex resets only after fresh account matching and explicit confirmation.
 - Refreshes one or all configured providers with bounded concurrency while preserving partial results.
 - Scopes statusline and cache data to the active provider and runtime account.
-- Resolves credentials through Pi or the process-local OAuth credential-source protocol and validates the effective provider endpoint before sending them.
+- Resolves credentials through Pi or the process-local OAuth credential-source protocol, waits for compatible pending account activation, and validates the effective provider endpoint before sending them.
 
 ## 📦 Install
 
@@ -66,7 +66,7 @@ Read the [query and reset guide](./docs/operations.md) for target selection, can
 
 ## ⚙️ Settings
 
-Choose **Settings** in `/usage` to edit Codex Fast mode and the Codex reset countdown through Pi's settings-list interaction in TUI mode.
+Choose **Settings** in `/usage` to edit Codex Fast mode, percentage display, and the reset countdown through Pi's settings-list interaction in TUI mode.
 RPC mode reports the active manual settings path instead of opening terminal UI.
 
 These preferences live in `pi-usage.json` under Pi's user agent directory, normally `~/.pi/agent/pi-usage.json`.
@@ -87,13 +87,27 @@ Run `/fast` without arguments to toggle Fast for the active supported Codex mode
 Fast is about 1.5× faster and uses more of your plan allowance.
 The `codexFastMode` preference defaults to Off.
 
-Fast currently applies only to official `openai-codex-responses` requests for `gpt-5.4`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna` at `https://chatgpt.com`.
+Fast currently applies only to official `openai-codex-responses` requests for `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-6-sol` at `https://chatgpt.com`.
 It sends `service_tier: "priority"` while enabled and explicit `service_tier: "default"` otherwise.
 The statusline adds `fast` only while the preference is effective, for example `codex fast 59% ↻ 2h30m` with the default reset countdown.
 Unsupported models and custom or proxy origins are left unchanged.
 
 A toggle affects provider requests whose payload hook starts after the save; a request already sent is unchanged.
 Repair or remove an invalid file, then run `/reload` before trying the toggle again.
+
+### Codex statusline percentage
+
+The `codexStatusPercentage` preference accepts `"remaining"` or `"used"` and defaults to `"remaining"` to preserve existing output.
+Choose **Codex percentage** in the TUI Settings screen, or set the field manually and run `/reload`:
+
+```json
+{
+  "codexStatusPercentage": "used"
+}
+```
+
+With `"used"`, a limit with 70% remaining appears as `30%`; its reset countdown or window label stays unchanged.
+This preference changes only Codex statusline formatting, not provider data or the detailed `/usage` report.
 
 ### Codex statusline reset countdown
 
@@ -138,6 +152,7 @@ Codex reset redemption requires a freshly matched current OAuth account and expl
 The extension selects one provider target for one query and never flattens targets into provider rows or aggregates every visible target.
 Provider adapters own target discovery and validation; core owns one-target selection, persistence, cache identity, cancellation, and UI.
 A compatible credential owner may offer the verified active named account through the versioned process-local protocol without exposing its account label or storage.
+When that owner is still activating the requested provider in the current session, `/usage` waits through the extension-neutral `oauth:credential-readiness:v1` protocol before collecting the synchronous credential offer.
 Without such an owner, `pi-usage` retains its standalone Pi `auth.json` behavior.
 An older or incompatible owner degrades to the existing authentication-unavailable result when the stored login does not match runtime auth.
 After the active runtime credential changes, the next command, turn, or scheduled refresh resolves auth again and cannot reuse another account's cached report.
@@ -179,8 +194,8 @@ Behavior changes:
 
 ## 🔒 Security and privacy
 
-Credential candidates are collected synchronously in memory and are not cached, persisted, logged, formatted, or appended to the Pi session.
-The protocol carries no account name or extension identity.
+Credential candidates are collected synchronously in memory after any compatible readiness promises settle, and are not cached, persisted, logged, formatted, or appended to the Pi session.
+The protocols carry no account name or extension identity.
 Only the selected provider's exact runtime match is used, and secrets are sent only to its validated official origin.
 DeepSeek balance requests require Bearer authentication, send only that resolved credential from Pi's runtime auth to `https://api.deepseek.com/user/balance`, and refuse redirects.
 Fireworks spend requests send only that resolved credential to the official `https://api.fireworks.ai` account-listing and billing-summary endpoints and refuse redirects.

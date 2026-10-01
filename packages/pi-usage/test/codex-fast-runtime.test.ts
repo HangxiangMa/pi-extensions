@@ -6,8 +6,8 @@ import { registerCodexFastMode } from "../src/codex-fast-runtime.js";
 import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.js";
 
 const codexModel = {
-  id: "gpt-5.4",
-  name: "GPT-5.4",
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
   api: "openai-codex-responses",
   provider: "openai-codex",
   baseUrl: "https://chatgpt.com/backend-api",
@@ -32,6 +32,7 @@ function memoryRuntime(
     settings: {
       codexFastMode: options.enabled ?? false,
       codexStatusResetCountdown: false,
+      codexStatusPercentage: "remaining",
       selectedTargets: {},
     },
     ...(options.kind === "invalid" ? { issue: "bad file" } : { document: {} }),
@@ -113,6 +114,32 @@ test("/fast toggles one persistent setting on and off with visible usage guidanc
   assert.equal(refreshes, 2);
 });
 
+test("/fast enables priority for gpt-6-sol and restores default when disabled", async () => {
+  const memory = memoryRuntime();
+  const mock = createMockPi();
+  const fast = registerCodexFastMode(mock.pi, memory.runtime, () => undefined);
+  const gpt6 = { ...codexModel, id: "gpt-6-sol", name: "GPT-6 Sol" };
+  const current = context({ model: gpt6 });
+  const command = mock.commands.get("fast");
+  const hook = mock.events.get("before_provider_request")?.[0];
+  assert.ok(command);
+  assert.ok(hook);
+  assert.deepEqual(fast.availability(gpt6 as never), { kind: "available", enabled: false });
+  await command.handler("", current.ctx);
+  assert.equal(memory.state.settings.codexFastMode, true);
+  assert.equal(fast.decorateStatus(gpt6 as never, "codex 80% 5h"), "codex fast 80% 5h");
+  assert.deepEqual(await hook({ payload: { model: "gpt-6-sol" } }, current.ctx), {
+    model: "gpt-6-sol",
+    service_tier: "priority",
+  });
+  await command.handler("", current.ctx);
+  assert.equal(memory.state.settings.codexFastMode, false);
+  assert.deepEqual(await hook({ payload: { model: "gpt-6-sol" } }, current.ctx), {
+    model: "gpt-6-sol",
+    service_tier: "default",
+  });
+});
+
 test("/fast rejects arguments and unsafe modes before mutation", async () => {
   const memory = memoryRuntime();
   const mock = createMockPi();
@@ -174,11 +201,11 @@ test("provider payload captures the toggle state when its hook begins", async ()
   const hook = mock.events.get("before_provider_request")?.[0];
   assert.ok(hook);
   const current = context();
-  const before = await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
+  const before = await hook({ payload: { model: "gpt-5.6-sol" } }, current.ctx);
   await mock.commands.get("fast")?.handler("", current.ctx);
-  const after = await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
-  assert.deepEqual(before, { model: "gpt-5.4", service_tier: "default" });
-  assert.deepEqual(after, { model: "gpt-5.4", service_tier: "priority" });
+  const after = await hook({ payload: { model: "gpt-5.6-sol" } }, current.ctx);
+  assert.deepEqual(before, { model: "gpt-5.6-sol", service_tier: "default" });
+  assert.deepEqual(after, { model: "gpt-5.6-sol", service_tier: "priority" });
 });
 
 test("cost correction follows the captured request tier across a later toggle", async () => {
@@ -191,7 +218,7 @@ test("cost correction follows the captured request tier across a later toggle", 
   assert.ok(messageEnd);
   const current = context();
   await mock.commands.get("fast")?.handler("", current.ctx);
-  await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
+  await hook({ payload: { model: "gpt-5.6-sol" } }, current.ctx);
   await mock.commands.get("fast")?.handler("", current.ctx);
   const usage = {
     input: 100,
@@ -212,7 +239,7 @@ test("cost correction follows the captured request tier across a later toggle", 
       message: {
         role: "assistant",
         provider: "openai-codex",
-        model: "gpt-5.4",
+        model: "gpt-5.6-sol",
         usage,
       },
     },
@@ -225,7 +252,7 @@ test("cost correction follows the captured request tier across a later toggle", 
         message: {
           role: "assistant",
           provider: "openai-codex",
-          model: "gpt-5.4",
+          model: "gpt-5.6-sol",
           usage,
         },
       },
@@ -245,7 +272,7 @@ test("an already-correct cost still consumes its request marker", async () => {
   assert.ok(hook);
   assert.ok(messageEnd);
   const current = context();
-  await hook({ payload: { model: "gpt-5.4" } }, current.ctx);
+  await hook({ payload: { model: "gpt-5.6-sol" } }, current.ctx);
   const usage = {
     input: 100,
     output: 20,
@@ -264,7 +291,7 @@ test("an already-correct cost still consumes its request marker", async () => {
     {
       role: "assistant",
       provider: "openai-codex",
-      model: "gpt-5.4",
+      model: "gpt-5.6-sol",
       usage,
     },
     codexModel as never,
@@ -313,7 +340,12 @@ test("session replacement aborts stale loads and accepted writes before UI publi
   releaseLoad({
     kind: "loaded",
     path: "/tmp/pi-usage.json",
-    settings: { codexFastMode: true, codexStatusResetCountdown: false, selectedTargets: {} },
+    settings: {
+      codexFastMode: true,
+      codexStatusResetCountdown: false,
+      codexStatusPercentage: "remaining",
+      selectedTargets: {},
+    },
     document: { codexFastMode: true },
   });
   await pendingLoad;

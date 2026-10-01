@@ -1,3 +1,4 @@
+import type { CodexStatusPercentage } from "./settings.js";
 import type { ProviderUsageState, UsageBucket, UsageDisplayState, UsageModel, UsageReport } from "./types.js";
 
 const BAR_SEGMENTS = 20;
@@ -54,10 +55,11 @@ export function formatUsageStatusline(
   model?: UsageModel,
   now = Date.now(),
   showCodexResetCountdown = true,
+  codexStatusPercentage: CodexStatusPercentage = "remaining",
 ): string | undefined {
   if (report.providerId === "baseten") return formatBasetenStatusline(report);
   if (report.providerId === "openai-codex") {
-    return formatCodexStatusline(report, model, now, showCodexResetCountdown);
+    return formatCodexStatusline(report, model, now, showCodexResetCountdown, codexStatusPercentage);
   }
   if (report.providerId === "deepseek") return formatDeepSeekStatusline(report);
   if (report.providerId === "fireworks") return formatFireworksStatusline(report);
@@ -280,6 +282,15 @@ function formatOpenCodeZenStatusline(report: UsageReport): string | undefined {
 function formatKimiCodingReport(lines: string[], report: UsageReport): void {
   for (const bucket of report.buckets) {
     const reset = bucket.resetsAt ? ` (resets ${formatReset(bucket.resetsAt)})` : "";
+    if (bucket.unit === "percent") {
+      const remaining = bucket.remaining === undefined ? undefined : Math.round(clampPercent(bucket.remaining));
+      const value =
+        bucket.used === undefined || remaining === undefined
+          ? "unavailable"
+          : `${100 - remaining}% used · ${remaining}% left`;
+      lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}${value}${reset}`);
+      continue;
+    }
     if (bucket.used === undefined || bucket.limit === undefined) {
       lines.push(`${`${bucket.label}:`.padEnd(VALUE_COLUMN)}unavailable${reset}`);
       continue;
@@ -309,15 +320,18 @@ function formatKimiCodingReport(lines: string[], report: UsageReport): void {
 function formatKimiCodingStatusline(report: UsageReport): string | undefined {
   const fiveHour = report.buckets.find((bucket) => bucket.id === "five-hour");
   const weekly = report.buckets.find((bucket) => bucket.id === "weekly");
-  const subWindow = fiveHour ?? report.buckets.find((bucket) => bucket.id !== "weekly");
-  const selected = [subWindow, weekly].filter(
+  const monthly = report.buckets.find((bucket) => bucket.id === "monthly");
+  const subWindow = fiveHour ?? report.buckets.find((bucket) => bucket.id !== "weekly" && bucket.id !== "monthly");
+  const selected = [subWindow, weekly, monthly].filter(
     (bucket, index, buckets): bucket is UsageBucket => bucket !== undefined && buckets.indexOf(bucket) === index,
   );
   const parts = ["kimi"];
   for (const bucket of selected) {
-    if (!bucket.limit || bucket.remaining === undefined) continue;
+    if (bucket.remaining === undefined || (bucket.unit !== "percent" && !bucket.limit)) continue;
     const fallback = bucket.id === "weekly" ? "weekly" : "5h";
-    parts.push(`${percentRemaining(bucket)}% ${formatWindowLabel(bucket.windowMinutes, fallback, true)}`);
+    const window = bucket.id === "monthly" ? "mo" : formatWindowLabel(bucket.windowMinutes, fallback, true);
+    const remaining = bucket.unit === "percent" ? Math.round(clampPercent(bucket.remaining)) : percentRemaining(bucket);
+    parts.push(`${remaining}% ${window}`);
   }
   return parts.length > 1 ? parts.join(" ") : undefined;
 }
@@ -521,6 +535,7 @@ function formatCodexStatusline(
   model?: UsageModel,
   now = Date.now(),
   showResetCountdown = true,
+  percentage: CodexStatusPercentage = "remaining",
 ): string | undefined {
   const group = selectCodexGroup(report, model);
   if (!group) return formatCodexCreditsStatus(report);
@@ -529,7 +544,8 @@ function formatCodexStatusline(
   const parts = [group === "codex" ? "codex" : `codex ${compactLimitLabel(labelBucket?.groupLabel ?? group)}`];
   for (const bucket of buckets) {
     if (bucket.remaining === undefined) continue;
-    const percent = `${clampPercent(bucket.remaining).toFixed(0)}%`;
+    const displayedPercentage = percentage === "used" ? (bucket.used ?? 100 - bucket.remaining) : bucket.remaining;
+    const percent = `${clampPercent(displayedPercentage).toFixed(0)}%`;
     const fallback = bucket.id.endsWith(":secondary") ? "weekly" : "5h";
     const window = formatWindowLabel(bucket.windowMinutes, fallback, true);
     if (!showResetCountdown) {

@@ -45,6 +45,7 @@ export interface ObservationAttributes {
 }
 
 export interface Observation {
+  readonly traceId?: string;
   update(attributes: ObservationAttributes): Observation;
   updateTrace?(attributes: ObservationAttributes): Observation;
   end(endTime?: number): Observation;
@@ -56,18 +57,22 @@ export interface TraceBackend {
   start(
     name: string,
     attributes: ObservationAttributes,
-    options: { asType: ObservationType; parent?: Observation },
+    options: { asType: ObservationType; parent?: Observation; startTime?: Date },
   ): Observation;
   forceFlush(): Promise<void>;
   shutdown(): Promise<void>;
 }
 
-interface RecorderContext {
+export interface TraceRecorderOptions {
   sessionId: string;
   userId?: string;
   cwd: string;
   mode: string;
   captureContent: boolean;
+  traceName?: string;
+  tags?: readonly string[];
+  metadata?: Readonly<Record<string, unknown>>;
+  onTraceId?: (traceId: string) => void;
 }
 
 interface ModelDescriptor {
@@ -97,6 +102,7 @@ interface BeginAgentInput {
   model?: ModelDescriptor;
   git?: GitMetadata;
   snapshot?: ContextSnapshot;
+  requestId?: string;
 }
 
 interface AttemptInput {
@@ -104,6 +110,7 @@ interface AttemptInput {
 }
 
 interface GenerationInput {
+  startedAt?: number;
   payload?: unknown;
   payloadStage?: "before_provider_request";
   model?: ModelDescriptor;
@@ -233,13 +240,13 @@ export class TraceRecorder {
 
   constructor(
     private readonly backend: TraceBackend,
-    private readonly context: RecorderContext,
+    private readonly context: TraceRecorderOptions,
   ) {}
 
   private startObservation(
     name: string,
     attributes: ObservationAttributes,
-    options: { asType: ObservationType; parent?: Observation },
+    options: { asType: ObservationType; parent?: Observation; startTime?: Date },
   ): Observation {
     const { sessionId, userId } = this.context;
     return this.backend.start(name, { ...attributes, sessionId, ...(userId ? { userId } : {}) }, options);
@@ -268,6 +275,7 @@ export class TraceRecorder {
       ...(hasItems(input.images) ? { images: input.images } : {}),
     });
     const metadata: Record<string, unknown> = {
+      ...customTraceMetadata(this.context.metadata),
       "pi.cwd": this.context.cwd,
       ...(input.git?.branch ? { "pi.git.branch": input.git.branch } : {}),
       ...(input.git?.commit ? { "pi.git.commit": input.git.commit } : {}),
@@ -275,6 +283,7 @@ export class TraceRecorder {
       "pi.mode": this.context.mode,
       ...(input.model?.id ? { "pi.model": input.model.id } : {}),
       ...(input.model?.provider ? { "pi.provider": input.model.provider } : {}),
+      ...(input.requestId ? { "pi.request.id": input.requestId } : {}),
       "pi.session.id": this.context.sessionId,
       "pi.trace.schema_version": Number(TRACE_SCHEMA_VERSION),
       ...snapshotMetadata("start", input.snapshot),
@@ -284,14 +293,22 @@ export class TraceRecorder {
 
     this.root = this.startObservation("pi.agent", attributes, { asType: "agent" });
     this.root.updateTrace?.({
-      name: "pi.trace",
+      name: normalizeTraceName(this.context.traceName),
       sessionId: this.context.sessionId,
       ...(this.context.userId ? { userId: this.context.userId } : {}),
       version: TRACE_SCHEMA_VERSION,
       input: traceInput,
       metadata,
-      tags: ["pi", ...(gitTag ? [gitTag] : [])],
+      tags: traceTags(this.context.tags, gitTag),
     });
+    const traceId = this.root.traceId;
+    if (traceId && this.context.onTraceId) {
+      try {
+        void Promise.resolve(this.context.onTraceId(traceId)).catch(() => undefined);
+      } catch {
+        // Host callbacks must not corrupt observation lifecycle state.
+      }
+    }
   }
 
   beginAttempt(input: AttemptInput = {}): void {
@@ -389,7 +406,11 @@ export class TraceRecorder {
         ...(Object.keys(requestMetadata).length > 0 ? { metadata: requestMetadata } : {}),
         version: TRACE_SCHEMA_VERSION,
       },
-      { asType: "generation", parent: this.turn ?? this.attempt ?? this.root },
+      {
+        asType: "generation",
+        parent: this.turn ?? this.attempt ?? this.root,
+        ...(input.startedAt === undefined ? {} : { startTime: new Date(input.startedAt) }),
+      },
     );
     this.generation = {
       observation,
@@ -613,13 +634,8 @@ export class TraceRecorder {
     this.closeActiveTrace(statusMessage, snapshot, "interrupted");
   }
 
-  async flush(): Promise<void> {
-    await this.backend.forceFlush();
-  }
-
-  async shutdown(snapshot?: ContextSnapshot): Promise<void> {
-    this.closeActiveTrace("Pi shut down before the active trace settled.", snapshot, "interrupted");
-    await this.backend.shutdown();
+  dispose(statusMessage = "Pi session ended before the active trace settled.", snapshot?: ContextSnapshot): void {
+    this.closeActiveTrace(statusMessage, snapshot, "interrupted");
   }
 
   private closeActiveTrace(statusMessage?: string, snapshot?: ContextSnapshot, forcedOutcome?: Outcome): void {
@@ -753,6 +769,28 @@ export class TraceRecorder {
   private capture(value: unknown): unknown {
     return this.context.captureContent ? sanitizeTraceValue(value) : CONTENT_DISABLED;
   }
+}
+
+function normalizeTraceName(value: string | undefined): string {
+  return typeof value === "string" && value.trim() ? value.trim() : "pi.trace";
+}
+
+function traceTags(customTags: readonly string[] | undefined, gitTag: string | undefined): string[] {
+  const tags = ["pi", ...(gitTag ? [gitTag] : []), ...(customTags ?? [])];
+  return [...new Set(tags.map(sanitizeTraceTag).filter((tag): tag is string => tag !== undefined))];
+}
+
+function sanitizeTraceTag(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const sanitized = sanitizeTraceValue(value.trim());
+  return typeof sanitized === "string" && sanitized.trim() ? sanitized.trim() : undefined;
+}
+
+function customTraceMetadata(metadata: Readonly<Record<string, unknown>> | undefined): Record<string, unknown> {
+  if (!metadata) return {};
+  const sanitized = sanitizeTraceValue(metadata);
+  if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) return {};
+  return Object.fromEntries(Object.entries(sanitized).filter(([key]) => !key.startsWith("pi.")));
 }
 
 function generationHttpMetadata(state: GenerationState): Record<string, unknown> {

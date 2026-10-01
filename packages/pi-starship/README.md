@@ -13,7 +13,7 @@ The extension parses and renders the footer itself, so it does not need the `sta
 - Starts with a readable built-in footer and offers Starship presets plus a Pi-native Minimal preset.
 - Supports root and module formats, conditional groups, `$all`, styles, palettes, and width-aware `$fill` alignment.
 - Selects provider, model, and thinking styles from exact runtime values with ordered module rules.
-- Provides Pi, model, usage, Git, pull request, package, language, environment, deployment, cloud, and execution modules.
+- Provides Pi, model, usage, Git, pull request, package, language, environment, deployment, cloud, and execution modules, with usage totals including persisted cache warming.
 - Wraps native multiline layouts to terminal width instead of truncating them.
 - Keeps rendering pure while refreshing filesystem, process, and network-derived data through bounded caches.
 - Uses `/starship` for presets, preview, configuration health, searchable module details, customization, and recovery.
@@ -96,7 +96,9 @@ format = "$model$directory$git_branch"
 style = "bold blue"
 ```
 
-Provider, model, and thinking modules also accept ordered exact-match `style_rules`; see [Configuration and format](./skills/configuring-pi-starship/references/configuration.md).
+Provider, model, and thinking modules also accept ordered exact-match `style_rules`.
+For per-extension status colors, add `[extension_status.styles]` entries using raw Pi status keys (or `namespace:*`); unmatched statuses keep the module style.
+See [Configuration and format](./skills/configuring-pi-starship/references/configuration.md) for examples and matching rules.
 Use `/starship` for interactive configuration, preview, diagnostics, presets, and recovery.
 Manual file edits load at the next `session_start`, including `/reload`.
 

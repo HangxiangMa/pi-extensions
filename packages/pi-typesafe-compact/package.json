@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-typesafe-compact",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeSafe JEV-guided selective history compaction for Pi.",
   "type": "module",
   "license": "MIT",
@@ -39,10 +39,10 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "0.85.1",
-    "@earendil-works/pi-ai": "0.85.1",
-    "@earendil-works/pi-coding-agent": "0.85.1",
-    "@types/node": "26.4.1",
+    "@earendil-works/pi-agent-core": "0.87.1",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@types/node": "26.6.3",
     "typescript": "7.0.2"
   },
   "repository": {

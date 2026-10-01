@@ -1,6 +1,6 @@
 {
   "name": "@narumitw/pi-stamp",
-  "version": "0.51.1",
+  "version": "0.52.0",
   "description": "Pi extension for transcript timestamps, assistant metadata, and tool timing.",
   "type": "module",
   "license": "MIT",
@@ -39,9 +39,9 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
-    "@earendil-works/pi-tui": "0.85.1",
-    "@types/node": "26.6.2",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/pi-tui": "0.87.1",
+    "@types/node": "26.6.3",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   },

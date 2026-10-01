@@ -203,7 +203,6 @@ vite.config.ts.timestamp-*
 # Project
 .pi/agent/
 .pi/skills/
-
 # Files written by `graft init` (regenerable, not vendored source).
 .claude/settings.json
 .claude/helpers/graft-statusline.cjs
@@ -225,6 +224,7 @@ GEMINI.md
 .kiro/steering/graft.md
 .kiro/settings/mcp.json
 .windsurf/rules/graft.md
+.pi/settings.json
 **/.pi-*-build-test-*/
 **/.pi-*-dist-*/
 docs/plans/archived/

@@ -5,8 +5,8 @@ import type { UsageSettingsRuntime, UsageSettingsState } from "../src/settings.j
 import usageExtension from "../src/usage.js";
 
 const codexModel = {
-  id: "gpt-5.4",
-  name: "GPT-5.4",
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
   api: "openai-codex-responses",
   provider: "openai-codex",
   baseUrl: "https://chatgpt.com/backend-api",
@@ -21,7 +21,12 @@ function runtime(kind: UsageSettingsState["kind"] = "loaded") {
   let state: UsageSettingsState = {
     kind,
     path: "/tmp/pi-usage.json",
-    settings: { codexFastMode: false, codexStatusResetCountdown: false, selectedTargets: {} },
+    settings: {
+      codexFastMode: false,
+      codexStatusResetCountdown: false,
+      codexStatusPercentage: "remaining",
+      selectedTargets: {},
+    },
     ...(kind === "invalid" ? { issue: "bad file" } : { document: {} }),
   };
   const patches: unknown[] = [];
@@ -102,6 +107,38 @@ test("/usage shows Fast state and toggles the same persistent preference", async
   assert.match(titles[0] ?? "", /Fast mode: Off/);
   assert.match(titles[0] ?? "", /1\.5× faster.*uses more/);
   assert.match(notifications[0]?.message ?? "", /Fast mode enabled/);
+});
+
+test("/usage offers Fast for gpt-6-sol", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.onTestFinished(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = response;
+  const memory = runtime();
+  const mock = createMockPi();
+  usageExtension(mock.pi, { settingsRuntime: memory.settingsRuntime });
+  const gpt6 = { ...codexModel, id: "gpt-6-sol", name: "GPT-6 Sol" };
+  let title = "";
+  let options: string[] = [];
+  const { ctx } = createMockContext({
+    hasUI: true,
+    mode: "rpc",
+    model: gpt6,
+    select: async (prompt: string, values: string[]) => {
+      title = prompt;
+      options = values;
+      return "Close";
+    },
+    modelRegistry: {
+      ...registry(),
+      getAvailable: () => [gpt6],
+      getAll: () => [gpt6],
+    },
+  });
+  await mock.commands.get("usage")?.handler("", ctx);
+  assert.match(title, /Fast mode: Off/);
+  assert.ok(options.includes("Turn Fast mode on"));
 });
 
 test("/usage cancellation does not change Fast and unsupported models show no toggle", async (t) => {

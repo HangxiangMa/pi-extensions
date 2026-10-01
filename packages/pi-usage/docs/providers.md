@@ -28,9 +28,10 @@ The README contains the capability overview and shared security requirements.
 - Source: the Codex usage and earned-reset endpoints using Pi's resolved runtime authorization
 - Displayed data: returned duration-based windows, resets, credits, earned usage-limit resets, and additional model buckets
 - Reset mutation: `POST /wham/rate-limit-reset-credits/consume` with a unique redemption request ID and, when available, the selected opaque credit ID
-- Statusline examples: `codex 59% ↻ 2h30m 61% ↻ 2d15m`, `codex fast 59% ↻ 2h30m`, or `codex spark 100% ↻ 2h30m`. Set `codexStatusResetCountdown` to `false` for the legacy `5h` and `wk` labels.
+- Statusline examples: `codex 59% ↻ 2h30m 61% ↻ 2d15m`, `codex fast 59% ↻ 2h30m`, or `codex spark 100% ↻ 2h30m`. Set `codexStatusPercentage` to `"used"` to show consumed percentages, or set `codexStatusResetCountdown` to `false` for the legacy `5h` and `wk` labels.
 
 The statusline selects a returned bucket that matches the current Codex model when one is available.
+The percentage preference affects only this compact status and defaults to remaining quota; it does not change the detailed report or returned usage data.
 Unlike `pi-codex-usage`, this successor intentionally has no Codex CLI fallback because the CLI may be logged into a different account than Pi's active runtime account.
 
 Reset redemption is available only when Codex is the current provider.
@@ -45,17 +46,21 @@ Opaque credit and account IDs are never shown or persisted by the extension.
 - Provider ID: `kimi-coding`
 - Semantics: Kimi Coding Plan request windows plus a separate Extra Usage booster wallet
 - Source: `GET https://api.kimi.com/coding/v1/usages` using Pi's freshly resolved runtime Bearer credential
-- Displayed plan data: the weekly summary, returned sub-windows, used and remaining request percentages, and valid reset times
-- Displayed wallet data: balance, monthly spend, and monthly charge limit
-- Statusline examples: `kimi 99% 5h 96% wk` or `kimi 95% 1d`
+- Displayed plan data: count-based weekly summaries and returned sub-windows, plus reported ratio-based five-hour, weekly, or monthly quotas and valid reset times
+- Displayed wallet data: balance, monthly spend, and monthly charge limit when the wallet supplies consistent currency and amounts
+- Statusline examples: `kimi 99% 5h 96% wk`, `kimi 56% 5h 21% mo`, or `kimi 95% 1d`
 
 Both Pi API-key credentials and Pi OAuth credentials are accepted because current Pi resolves each form as Bearer authorization for the same official Kimi inference origin.
 The extension queries the fixed usage endpoint only when both the selected model origin and the effective resolved-auth origin are `https://api.kimi.com`.
 Custom and proxy origins fail before network access, redirects are rejected, and the credential is never sent to an override from Kimi Code's environment-specific development path.
 
-Plan buckets remain integer request counts and are rendered with their source-defined windows.
+Count-based plan buckets remain integer request counts and are rendered with their source-defined windows.
 Live responses omit both `used` and `remaining` on untouched rows and may report only `remaining` once usage starts, so a row with a positive `limit` and no counters means zero usage, and when only one counter is present the other is derived from `limit`.
-Counters that are present but malformed, unknown units, duplicate windows, invalid timestamps, and malformed rows remain unavailable rather than receiving guessed semantics.
+A monthly-plan response reported in [issue #1390](https://github.com/narumiruna/pi-extensions/issues/1390) supplies `usages.limit_month_total.used_ratio` without a count-based monthly row; the extension shows its remaining percentage and `reset_time` as a monthly bucket without inventing a fixed month duration.
+The same map can supply `limit_5h` and `limit_week` when those windows are not present in `limits` or `usage`; `limit_month_code` is not a second total quota.
+Explicit count-based windows with identifiable durations take precedence, including duplicate or malformed count rows, so ratio rows cannot mask their unavailable state.
+Ratios must be finite numbers between zero and one; unknown map keys, malformed rows, invalid timestamps, and unknown count-based units do not receive guessed semantics.
+The top-level wallet may be `boosterWallet` or `booster_wallet` (the former takes precedence when both are present); its nested fields retain their existing camelCase validation.
 Booster-wallet `amount` and `amountLeft` values use Kimi's first-party conversion of 1,000,000 fixed-point units per cent, while monthly values already arrive in cents.
 Wallet values retain their currency and stay separate from plan requests and percentages in reports and the statusline.
 Wallet fields remain unavailable unless the response supplies one consistent currency; missing monthly values are omitted, and an enabled zero cap is shown as zero.

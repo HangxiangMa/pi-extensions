@@ -1,9 +1,17 @@
 {
   "name": "@narumitw/pi-langfuse",
-  "version": "0.50.6",
+  "version": "0.51.1",
   "description": "Pi extension that traces LLM generations and tool activity to Langfuse.",
   "type": "module",
   "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "private": false,
   "keywords": [
     "pi-package",
@@ -35,8 +43,8 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.85.1",
-    "@types/node": "26.6.2",
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@types/node": "26.6.3",
     "typescript": "7.0.2",
     "esbuild": "0.28.2"
   },

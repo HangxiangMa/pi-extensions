@@ -1,5 +1,19 @@
 # @narumitw/pi-accounts
 
+## 0.52.2
+
+### Patch Changes
+
+- 751a296: Start Pi sessions without waiting for account-file locks or provider activation, while preserving fail-closed authentication by gating each provider's first use, allowing compatible usage queries to await pending activation, and cancelling stale startup work.
+- Updated dependencies [e6db042]
+  - @narumitw/pi-tui-kit@0.65.1
+
+## 0.52.1
+
+### Patch Changes
+
+- 8abd5b7: Keep generated extension runtime graphs inside Pi's Jiti-loaded TypeScript path to avoid duplicate peer-runtime evaluation during startup. Add measured generated runtimes for Context Management, Herdr, and TypeSafe Search.
+
 ## 0.52.0
 
 ### Minor Changes

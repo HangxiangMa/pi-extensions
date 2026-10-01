@@ -1,5 +1,41 @@
 # @narumitw/pi-btw
 
+## 0.61.1
+
+### Patch Changes
+
+- c073bc0: Fix the main-thread tree picker on Pi 0.87 sessions containing context edits.
+- 81be3f7: Send a per-thread routing `sessionId` with side requests so provider overrides that require one, such as subscription attribution transports, no longer reject `/btw`; the main session ID is still used only for OpenCode headers.
+
+## 0.61.0
+
+### Minor Changes
+
+- 865f1d3: Make the split-pane divider draggable and remember the side-thread width.
+- 129f324: Add configurable fullscreen, side-thread-left, and side-thread-right workspaces with Pi's live main-thread view and click-to-focus input.
+
+### Patch Changes
+
+- 2bacc07: Use one muted column for the split-pane divider.
+
+## 0.60.3
+
+### Patch Changes
+
+- 34b57b2: Route side-thread requests through Pi's authenticated `modelRegistry.streamSimple()` path so extension-registered providers, OAuth endpoint overrides, headers, and environment credentials are resolved by Pi at request time.
+
+## 0.60.2
+
+### Patch Changes
+
+- 8abd5b7: Keep generated extension runtime graphs inside Pi's Jiti-loaded TypeScript path to avoid duplicate peer-runtime evaluation during startup. Add measured generated runtimes for Context Management, Herdr, and TypeSafe Search.
+
+## 0.60.1
+
+### Patch Changes
+
+- 67a3049: Adapt provider, transcript, usage, deferred-tool, and telemetry behavior to Pi's current runtime contracts, including accurate cache-warming accounting and exclusion from ordinary generation traces.
+
 ## 0.60.0
 
 ### Minor Changes
