@@ -6,7 +6,9 @@ import { builtinTool, createMockContext, createMockPi } from "./support.js";
 // Plan mode is observable through its tool_call guard: while it is active, edit is blocked.
 type ToolCallResult = { block?: boolean; reason?: string } | undefined;
 
-function setup(options: { hasUI?: boolean; confirm?: (...args: unknown[]) => Promise<boolean> } = {}) {
+function setup(
+  options: { hasUI?: boolean; confirm?: (...args: unknown[]) => Promise<boolean>; isIdle?: () => boolean } = {},
+) {
   const mock = createMockPi({
     activeTools: ["read", "edit", "request_plan_mode"],
     allTools: [builtinTool("read"), builtinTool("edit")],
@@ -14,7 +16,11 @@ function setup(options: { hasUI?: boolean; confirm?: (...args: unknown[]) => Pro
   planMode(mock.pi, {
     readSettings: async () => ({ kind: "loaded" as const, settings: { thinkingLevel: "inherit" as const } }),
   });
-  const context = createMockContext({ hasUI: options.hasUI ?? true, confirm: options.confirm });
+  const context = createMockContext({
+    hasUI: options.hasUI ?? true,
+    confirm: options.confirm,
+    ...(options.isIdle ? { isIdle: options.isIdle } : {}),
+  });
   return { mock, context };
 }
 
@@ -75,6 +81,27 @@ test("approval does not enter Plan mode during the call, only after the run sett
   await new Promise((resolve) => setTimeout(resolve, 10));
   await fixture.mock.events.get("agent_settled")?.[0]?.({ aborted: false }, fixture.context.ctx);
   assert.equal(await editBlocked(fixture), true, "Plan mode must be active after the run settles");
+});
+
+test("approval while the run is still active waits for agent_settled without a busy warning", async () => {
+  let idle = false;
+  const fixture = setup({ confirm: async () => true, isIdle: () => idle });
+  await startSession(fixture);
+  const result = await requestTool(fixture).execute("call-5", {}, undefined, undefined, fixture.context.ctx);
+  assert.equal(result.details.outcome, "approved");
+
+  // The tool call is still inside an active run. Nothing may try to enter Plan mode yet.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(await editBlocked(fixture), false, "entry must wait for the run to settle");
+  assert.equal(
+    fixture.context.notifications.some((n) => /Cannot start Plan mode/.test(n.message)),
+    false,
+    "no busy-run warning may be shown while the run is active",
+  );
+
+  idle = true;
+  await fixture.mock.events.get("agent_settled")?.[0]?.({ aborted: false }, fixture.context.ctx);
+  assert.equal(await editBlocked(fixture), true, "Plan mode must be active once the run settles");
 });
 
 test("without a UI the request is refused and nothing is asked or changed", async () => {

@@ -214,6 +214,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   let readyPresentationIntent: ReadyPresentationIntent | undefined;
   let latestCommandContext: ExtensionCommandContext | undefined;
   let stagedFreshImplementation: DeferredFreshImplementation | undefined;
+  let pendingPlanModeRequest: { menuGeneration: number } | undefined;
   const deferredFreshHandoff = createDeferredFreshHandoffCoordinator();
   let nextReadyPresentationNonce = 0;
   let menuGeneration = 0;
@@ -294,17 +295,8 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
       }
 
       // Tool execution is not idle, so entering now would be refused by allowModeTransition.
-      // Defer to the settled hook, the same way the fresh-implementation handoff does.
-      const menuGenerationAtRequest = menuGeneration;
-      deferredFreshHandoff.schedule(
-        async (taskIsCurrent) => {
-          if (!taskIsCurrent() || menuGeneration !== menuGenerationAtRequest || state.enabled) return;
-          enterPlanMode(ctx);
-        },
-        (error) => {
-          ctx.ui.notify(`Unable to start Plan mode: ${terminalErrorDetail(error)}`, "warning");
-        },
-      );
+      // Enter from agent_settled instead, once no run is active.
+      pendingPlanModeRequest = { menuGeneration };
       return requestPlanModeResult(
         "approved",
         "The user approved. Plan mode starts after this run settles; do not edit files until it is active.",
@@ -884,6 +876,16 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
   pi.on("agent_settled", async (_event, ctx) => {
     const settledImplementationId = implementationRetention.implementationSettled(state.activeImplementation);
     if (settledImplementationId) clearActiveImplementation(settledImplementationId, ctx);
+
+    const planModeRequest = pendingPlanModeRequest;
+    if (planModeRequest) {
+      if (planModeRequest.menuGeneration !== menuGeneration) {
+        pendingPlanModeRequest = undefined;
+      } else if (ctx.isIdle() && !ctx.hasPendingMessages()) {
+        pendingPlanModeRequest = undefined;
+        if (!state.enabled) enterPlanMode(ctx);
+      }
+    }
 
     if (finalizationRequest.hasPendingRequest() && state.enabled && workflowMutex.isOwner(workflowOwner)) {
       if (!ctx.isIdle() || ctx.hasPendingMessages()) return;
