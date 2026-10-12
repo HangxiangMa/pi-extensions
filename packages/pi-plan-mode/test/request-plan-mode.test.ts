@@ -29,7 +29,7 @@ async function startSession(fixture: ReturnType<typeof setup>) {
 }
 
 function requestTool(fixture: ReturnType<typeof setup>) {
-  const tool = fixture.mock.tools.find((t: { name: string }) => t.name === "request_plan_mode") as
+  const tool = fixture.mock.tools.find((t) => t.name === "request_plan_mode") as
     | { execute: (...args: unknown[]) => Promise<{ details: { outcome: string } }> }
     | undefined;
   assert.ok(tool, "request_plan_mode must be registered");
