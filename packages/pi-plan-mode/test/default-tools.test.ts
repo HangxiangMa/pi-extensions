@@ -55,11 +55,9 @@ test("Plan lifecycle never mutates the stable helper-tool envelope", async () =>
   assert.deepEqual(writes, []);
 });
 
-// QUARANTINED: intermittent timing failure, root cause not yet identified.
-// Passes in isolation and in repeated full-package runs; failed only in two earlier full runs.
-// Timing, CPU load, watcher leaks, install order and inotify limits were ruled out.
-// Re-enable once a failing run's watcher event and reload timing are captured.
-test.skip("watched retired visibility is ignored while remaining settings still reload", async () => {
+// Failed when the user-wide inotify watch limit (max_user_watches) was exhausted: fs.watch threw
+// ENOSPC and the watcher was never armed, so the test waited for a reload that could not happen.
+test("watched retired visibility is ignored while remaining settings still reload", async () => {
   await withAgentDir(async (agentDir) => {
     const settingsPath = join(agentDir, "pi-plan-mode.json");
     await writeFile(settingsPath, '{"toolVisibility":"always"}\n');

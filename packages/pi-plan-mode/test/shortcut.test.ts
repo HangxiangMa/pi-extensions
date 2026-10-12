@@ -181,11 +181,9 @@ for (const [name, initial, next] of [
   ["change", KEY, NEXT_KEY],
   ["disable", KEY, undefined],
 ] as const) {
-  // QUARANTINED: intermittent timing failure, root cause not yet identified.
-  // Passes in isolation and in repeated full-package runs; failed only in two earlier full runs.
-  // Timing, CPU load, watcher leaks, install order and inotify limits were ruled out.
-  // Re-enable once a failing run's watcher event and reload timing are captured.
-  test.skip(`watched shortcut ${name} stays pending until runtime reload`, async () => {
+  // Failed when the user-wide inotify watch limit (max_user_watches) was exhausted: fs.watch threw
+  // ENOSPC and the watcher was never armed, so the test waited for a reload that could not happen.
+  test(`watched shortcut ${name} stays pending until runtime reload`, async () => {
     await withShortcut(initial, async (f) => {
       const startup = f.registrations();
       await f.change(next);
