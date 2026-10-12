@@ -152,6 +152,38 @@ interface PlanModeDependencies {
   loadInteractiveUi?(): Promise<InteractiveUi>;
 }
 
+// Model-callable request to enter Plan mode. It is deliberately not a Plan helper tool: it never
+// runs inside Plan mode, and the user must confirm before any state changes.
+const REQUEST_PLAN_MODE_TOOL_NAME = "request_plan_mode";
+const REQUEST_PLAN_MODE_PARAMS = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    reason: {
+      type: "string",
+      minLength: 1,
+      maxLength: 500,
+      description: "One sentence on why planning is needed first. Shown to the user in the confirmation.",
+    },
+  },
+} as const;
+
+function normalizeRequestPlanModeReason(params: unknown): { ok: true; value: string } | { ok: false; error: string } {
+  const reason = (params as { reason?: unknown } | undefined)?.reason;
+  if (reason === undefined) return { ok: true, value: "the agent wants to plan before editing." };
+  if (typeof reason !== "string" || reason.trim().length === 0) {
+    return { ok: false, error: "reason must be a non-empty string when provided" };
+  }
+  return { ok: true, value: reason.trim().slice(0, 500) };
+}
+
+function requestPlanModeResult(outcome: "approved" | "already_active" | "declined" | "no_ui", message: string) {
+  return {
+    content: [{ type: "text" as const, text: message }],
+    details: { version: 1, source: REQUEST_PLAN_MODE_TOOL_NAME, outcome },
+  };
+}
+
 // Keep session state, persistence, tool, thinking, and mutex commits in this one closure so an
 // activation path cannot bypass the same atomic transition by crossing module-owned state.
 export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDependencies = {}) {
@@ -229,6 +261,54 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     },
     clearSaved: (ctx) => {
       if (exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
+    },
+  });
+
+  pi.registerTool({
+    name: REQUEST_PLAN_MODE_TOOL_NAME,
+    label: "Request Plan mode",
+    description:
+      "Ask the user to switch this session into Plan mode before any file is edited. The user must confirm; if they decline, nothing changes. Use it when a task needs exploration and an approved plan first. Plan mode starts after the current agent run settles, not during this call.",
+    parameters: REQUEST_PLAN_MODE_PARAMS,
+    async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
+      const reason = normalizeRequestPlanModeReason(params);
+      if (!reason.ok) throw new Error(reason.error);
+
+      if (state.enabled) {
+        return requestPlanModeResult("already_active", "Plan mode is already active.");
+      }
+      if (!ctx.hasUI) {
+        return requestPlanModeResult(
+          "no_ui",
+          "Plan mode needs user confirmation, which is unavailable in this session.",
+        );
+      }
+
+      const approved = await ctx.ui.confirm(
+        "Enter Plan mode?",
+        `The agent asks to enter Plan mode: ${reason.value}\n\nPlan mode blocks file edits until a plan is approved.`,
+      );
+      if (!approved) return requestPlanModeResult("declined", "The user declined. Plan mode was not started.");
+      if (state.enabled) {
+        return requestPlanModeResult("already_active", "Plan mode is already active.");
+      }
+
+      // Tool execution is not idle, so entering now would be refused by allowModeTransition.
+      // Defer to the settled hook, the same way the fresh-implementation handoff does.
+      const menuGenerationAtRequest = menuGeneration;
+      deferredFreshHandoff.schedule(
+        async (taskIsCurrent) => {
+          if (!taskIsCurrent() || menuGeneration !== menuGenerationAtRequest || state.enabled) return;
+          enterPlanMode(ctx);
+        },
+        (error) => {
+          ctx.ui.notify(`Unable to start Plan mode: ${terminalErrorDetail(error)}`, "warning");
+        },
+      );
+      return requestPlanModeResult(
+        "approved",
+        "The user approved. Plan mode starts after this run settles; do not edit files until it is active.",
+      );
     },
   });
 

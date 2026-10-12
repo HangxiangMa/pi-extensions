@@ -23,10 +23,13 @@ test("plan-mode registers question tools, command, and safety hooks without a CL
   planMode(mock.pi);
 
   assert.equal(mock.flags.has("plan"), false);
-  assert.deepEqual(
-    mock.tools.map((tool) => tool.name),
-    ["plan_mode_question", "plan_mode_complete"],
-  );
+  // request_plan_mode is the model-callable entry point; the two plan helpers stay the
+  // required allowlist that Plan mode checks before it starts.
+  assert.deepEqual(mock.tools.map((tool) => tool.name).sort(), [
+    "plan_mode_complete",
+    "plan_mode_question",
+    "request_plan_mode",
+  ]);
   assert.ok(mock.commands.has("plan"));
   assert.equal(typeof mock.commands.get("plan")?.getArgumentCompletions, "function");
   assert.ok(mock.events.has("tool_call"));

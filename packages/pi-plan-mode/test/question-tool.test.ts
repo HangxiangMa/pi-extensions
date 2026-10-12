@@ -38,7 +38,7 @@ function paste(tui: ReturnType<typeof createTuiHarness>, text: string) {
 test("plan_mode_question reports non-interactive cancellation", async () => {
   const mock = createMockPi();
   planMode(mock.pi);
-  const execute = mock.tools[0]?.execute as
+  const execute = mock.tools.find((tool) => tool.name === "plan_mode_question")?.execute as
     | ((...args: unknown[]) => Promise<{ details?: { reason?: string } }>)
     | undefined;
   assert.ok(execute);
