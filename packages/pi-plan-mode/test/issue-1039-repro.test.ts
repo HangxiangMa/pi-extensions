@@ -40,7 +40,7 @@ test("issue 1039: any active extension tool requires explicit Plan-policy opt-in
   });
   assert.deepEqual(await callTool(automatic, CUSTOM_TOOL), {
     block: true,
-    reason: `Plan mode blocks tool '${CUSTOM_TOOL}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`,
+    reason: `Plan mode blocks tool '${CUSTOM_TOOL}' because it is not selected by the Plan policy. Ask the user to allow it with request_plan_tools, or exit Plan mode and enable it with /plan tools or defaultPlanTools before starting again.`,
   });
 
   const explicit = await startPlan({

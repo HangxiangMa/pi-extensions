@@ -42,6 +42,19 @@ interface PlanActionControllerOptions {
   stay(ctx: ExtensionContext): void;
   exitReady(ctx: ExtensionContext): void;
   clearSaved(ctx: ExtensionContext): void;
+  // Optional: only the running Plan menu can change the live allowlist.
+  planTools?: PlanToolsAdapter;
+}
+
+export interface PlanToolsAdapter {
+  rows(): PlanToolRow[];
+  apply(change: { add: string[]; remove: string[] }, ctx: ExtensionContext): void;
+}
+
+export interface PlanToolRow {
+  name: string;
+  label: string;
+  allowed: boolean;
 }
 
 export function createPlanActionController(options: PlanActionControllerOptions) {
@@ -128,6 +141,14 @@ export function createPlanActionController(options: PlanActionControllerOptions)
         save: () => options.save(ctx),
         stay: () => options.stay(ctx),
         exit: () => options.exitReady(ctx),
+        ...(options.planTools
+          ? {
+              planTools: {
+                rows: () => options.planTools?.rows() ?? [],
+                apply: (change: { add: string[]; remove: string[] }) => options.planTools?.apply(change, ctx),
+              },
+            }
+          : {}),
       });
     },
     async showReady(ctx: ExtensionContext) {

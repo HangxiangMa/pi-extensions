@@ -97,6 +97,13 @@ import {
   readCommand,
 } from "./tool-policy.js";
 import { compareTools, snapshotPlanModeSelectedNames, toolPolicyLabel, unique } from "./tool-selection.js";
+import {
+  classifyWidenRequest,
+  normalizeWidenToolsParams,
+  PLAN_MODE_WIDEN_PARAMS,
+  PLAN_MODE_WIDEN_TOOL_NAME,
+  widenToolsResult,
+} from "./widen-tools.js";
 import { WorkflowMutex, type WorkflowMutexOwner } from "./workflow-mutex.js";
 
 const STATE_ENTRY_TYPE = "plan-mode-state";
@@ -263,6 +270,15 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     clearSaved: (ctx) => {
       if (exitPlanMode(ctx)) ctx.ui.notify("Saved plan cleared.", "info");
     },
+    planTools: {
+      rows: () => (state.enabled && workflowMutex.isOwner(workflowOwner) ? adjustableToolRows() : []),
+      apply: (change, ctx) => {
+        // Only the running Plan may change its allowlist; a stale menu after exit must be a no-op.
+        if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) return;
+        writeRunningToolPolicy(change, ctx);
+        ctx.ui.notify(`Plan tools updated: ${change.add.length} allowed, ${change.remove.length} blocked.`, "info");
+      },
+    },
   });
 
   pi.registerTool({
@@ -362,6 +378,56 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
 
       acceptCompletedPlan(parsed.plan, PLAN_MODE_COMPLETE_TOOL_NAME, ctx);
       return planModeCompleted(parsed.plan);
+    },
+  });
+
+  pi.registerTool({
+    name: PLAN_MODE_WIDEN_TOOL_NAME,
+    label: "Widen Plan tools",
+    description:
+      "While Plan mode is active, ask the user to add already-active, read-only tools (for example grep, bash, or a delegation tool) to this Plan run's allowlist. The user must confirm; if they decline or no UI is available, nothing changes. Never request edit, write, or update_plan.",
+    parameters: PLAN_MODE_WIDEN_PARAMS,
+    async execute(_toolCallId, params: unknown, _signal, _onUpdate, ctx) {
+      if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
+        return widenToolsResult("inactive", "Error: request_plan_tools is only available while Plan mode is active.");
+      }
+      const parsed = normalizeWidenToolsParams(params);
+      if (!parsed.ok) throw new Error(parsed.error);
+
+      const allTools = safeGetAllTools();
+      const activeNames = new Set(safeGetActiveTools());
+      const allowedNow = new Set(planModePolicyToolNames());
+      const { admit, rejected } = classifyWidenRequest(parsed.tools, allTools, activeNames, allowedNow);
+      if (admit.length === 0) {
+        const message =
+          rejected.length === 0
+            ? "All requested tools are already allowed by the Plan policy."
+            : `No requested tool can be added: ${rejected.map((item) => `${item.name} (${item.why})`).join("; ")}.`;
+        return widenToolsResult(rejected.length === 0 ? "nothing_new" : "rejected", message, { rejected });
+      }
+      if (!ctx.hasUI) {
+        return widenToolsResult(
+          "no_ui",
+          "Adding tools to Plan mode needs user confirmation, which is unavailable in this session.",
+          { rejected },
+        );
+      }
+
+      const approved = await ctx.ui.confirm(
+        "Add tools to Plan mode?",
+        `The agent asks to allow these tools for this Plan run: ${admit.join(", ")}.\nReason: ${parsed.reason}\n\nPlan mode still blocks edit, write, and update_plan.`,
+      );
+      if (!approved)
+        return widenToolsResult("declined", "The user declined. The Plan tool allowlist is unchanged.", { rejected });
+      if (!state.enabled || !workflowMutex.isOwner(workflowOwner)) {
+        return widenToolsResult("inactive", "Plan mode ended before the tools could be added.", { rejected });
+      }
+
+      writeRunningToolPolicy({ add: admit, remove: [] }, ctx);
+      return widenToolsResult("widened", `Added to the Plan tool allowlist: ${admit.join(", ")}.`, {
+        added: admit,
+        rejected,
+      });
     },
   });
 
@@ -718,7 +784,9 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
             : `Plan mode blocks mutating tool '${event.toolName}'.`,
       };
     }
-    if (requiredHelper) return;
+    // The widen tool only asks the user and then widens; its execute re-checks state, so it
+    // must not be blocked by the allowlist it exists to change.
+    if (requiredHelper || event.toolName === PLAN_MODE_WIDEN_TOOL_NAME) return;
 
     const calledTool = toolByName(event.toolName);
     const activeToolNames = new Set(safeGetActiveTools());
@@ -757,7 +825,7 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
         block: true,
         reason: workflowDesiredToolNames().has(event.toolName)
           ? `Plan mode blocks tool '${event.toolName}' because it was not available when the active Plan workflow froze its tool policy. Exit Plan mode, then start again after the tool is active.`
-          : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Exit Plan mode, then enable it with /plan tools or defaultPlanTools before starting again.`,
+          : `Plan mode blocks tool '${event.toolName}' because it is not selected by the Plan policy. Ask the user to allow it with ${PLAN_MODE_WIDEN_TOOL_NAME}, or exit Plan mode and enable it with /plan tools or defaultPlanTools before starting again.`,
       };
     }
     if (event.toolName === "bash") {
@@ -1589,6 +1657,40 @@ export default function planMode(pi: ExtensionAPI, dependencies: PlanModeDepende
     const policy = state.workflowToolPolicy;
     if (!state.enabled || !policy) return new Set<string>();
     return new Set(policy.kind === "automatic" ? automaticPlanModeToolNames() : (policy.desiredNames ?? []));
+  }
+
+  // Single writer for the running Plan allowlist. Adding and removing share this path so the live
+  // set, the frozen allowedNames, and the explicit desiredNames never drift apart. Removing must
+  // clear desiredNames too, or the tool_call guard would report a stale "frozen policy" reason.
+  function writeRunningToolPolicy(change: { add: string[]; remove: string[] }, ctx: ExtensionContext) {
+    const removed = new Set(change.remove);
+    const added = unique(change.add);
+    const policy = state.workflowToolPolicy;
+    const nextAllowed = unique([...planModePolicyToolNames().filter((name) => !removed.has(name)), ...added]);
+    workflowAllowedToolNames = nextAllowed;
+    if (policy) {
+      const keep = (names: readonly string[]) => names.filter((name) => !removed.has(name));
+      const nextPolicy = {
+        ...policy,
+        ...(policy.kind === "explicit" ? { desiredNames: unique([...keep(policy.desiredNames ?? []), ...added]) } : {}),
+        allowedNames: unique([...keep(policy.allowedNames), ...added]),
+        resolved: true,
+      };
+      state = { ...state, workflowToolPolicy: nextPolicy };
+    }
+    persistState();
+    updateUi(ctx);
+    return nextAllowed;
+  }
+
+  // Plan-mode tool names the user may toggle in Plan mode. Helpers and mutating built-ins are never
+  // part of the policy, so they can never be switched on here.
+  function adjustableToolRows() {
+    const activeNames = new Set(safeGetActiveTools());
+    const allowed = new Set(planModePolicyToolNames());
+    return selectableTools()
+      .filter((tool) => canSelectToolInPlanMode(tool) && activeNames.has(tool.name))
+      .map((tool) => ({ name: tool.name, label: tool.name, allowed: allowed.has(tool.name) }));
   }
 
   function beginWorkflowToolPolicy() {

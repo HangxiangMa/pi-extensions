@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { defineMenu, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
+import { type ActionMenuItem, defineMenu, runMenu, sanitizeTerminalText } from "@narumitw/pi-tui-kit";
 import {
   type AvailableImplementationModel,
   findAvailableImplementationModel,
@@ -35,6 +35,10 @@ interface PlanMenuOptions extends MenuLifecycle {
   planThinkingLevel: PlanModeFixedThinkingLevel | undefined;
   implementationDefaults?: ImplementationRuntimeSelection;
   hasReadyPlan: boolean;
+  planTools?: {
+    rows(): PlanToolRow[];
+    apply(change: { add: string[]; remove: string[] }): void;
+  };
   implementationOutcome(): string;
   getExportDestination: PlanExportDestinationProvider;
   show(): void;
@@ -47,28 +51,106 @@ interface PlanMenuOptions extends MenuLifecycle {
   exit(): void;
 }
 
+export interface PlanToolRow {
+  name: string;
+  label: string;
+  allowed: boolean;
+}
+
+type PlanMenuScreen = "main" | "fresh" | "models" | "thinking" | "export" | "tools";
+type PlanMenuAction =
+  | "show"
+  | "finalize"
+  | "toggle-plan-tool"
+  | "apply-plan-tools"
+  | "implement-here"
+  | "select-model"
+  | "select-thinking"
+  | "start-fresh"
+  | "export"
+  | "save"
+  | "stay"
+  | "exit";
+
+function mainMenuItems(
+  options: Pick<PlanMenuOptions, "hasReadyPlan" | "planTools">,
+): ActionMenuItem<PlanMenuScreen, PlanMenuAction>[] {
+  const adjustTools: ActionMenuItem<PlanMenuScreen, PlanMenuAction>[] = options.planTools
+    ? [
+        {
+          id: "tools",
+          label: "Adjust tools…",
+          description: "Allow or block active tools for this Plan run.",
+          to: "tools",
+        },
+      ]
+    : [];
+  const readyItems: ActionMenuItem<PlanMenuScreen, PlanMenuAction>[] = [
+    { id: "show", label: "Show latest proposed plan", action: "show" },
+    {
+      id: "implement-here",
+      label: "Implement here",
+      description: "Continue in this session with the planning conversation.",
+      action: "implement-here",
+    },
+    {
+      id: "implement-fresh",
+      label: "Start fresh and implement",
+      description: "Configure one-shot model and thinking choices first.",
+      to: "fresh",
+    },
+    { id: "export", label: "Export plan…", to: "export" },
+    { id: "save", label: "Save for later", action: "save" },
+    { id: "stay", label: "Stay in Plan mode", action: "stay" },
+    { id: "exit", label: "Discard plan and exit", action: "exit" },
+  ];
+  const draftItems: ActionMenuItem<PlanMenuScreen, PlanMenuAction>[] = [
+    { id: "finalize", label: "Request final plan", action: "finalize" },
+    { id: "stay", label: "Stay in Plan mode", action: "stay" },
+    { id: "exit", label: "Exit Plan mode", action: "exit" },
+  ];
+  return [...adjustTools, ...(options.hasReadyPlan ? readyItems : draftItems)];
+}
+
 export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuOptions) {
-  type Screen = "main" | "fresh" | "models" | "thinking" | "export";
-  type Action =
-    | "show"
-    | "finalize"
-    | "implement-here"
-    | "select-model"
-    | "select-thinking"
-    | "start-fresh"
-    | "export"
-    | "save"
-    | "stay"
-    | "exit";
   const freshFlow = createFreshImplementationFlow(
     ctx,
     options.planThinkingLevel,
     options.implementationDefaults,
     options.implementFresh,
   );
-  const menu = defineMenu<undefined, Screen, Action, ExtensionContext>({
+  // Draft selection for the Adjust-tools screen. Changes are written once, on Done, as a diff against
+  // the rows captured when the screen opened, mirroring the launch menu's draft model.
+  const toolRows = options.planTools?.rows() ?? [];
+  const toolByItemId = new Map(toolRows.map((row) => [`plan-tool:${row.name}`, row]));
+  const toolDraft = new Set(toolRows.filter((row) => row.allowed).map((row) => row.name));
+  const menu = defineMenu<undefined, PlanMenuScreen, PlanMenuAction, ExtensionContext>({
     start: "main",
     screens: {
+      tools: () => ({
+        kind: "multiSelect",
+        title: "Adjust Plan tools",
+        lines: [
+          "Toggle which active tools this Plan run may use. Changes apply when you press Done.",
+          "Only active tools are listed. Edit, write, update_plan, and Plan helpers are never allowed.",
+        ],
+        enableSearch: true,
+        viewportSize: 10,
+        items: toolRows.map((row) => ({
+          id: `plan-tool:${row.name}`,
+          label: row.label,
+          selected: toolDraft.has(row.name),
+        })),
+        action: "toggle-plan-tool",
+        actions: [
+          {
+            id: "apply-plan-tools",
+            label: "Done — apply to this Plan run",
+            action: "apply-plan-tools",
+          },
+        ],
+        hint: "back",
+      }),
       main: () => ({
         kind: "actions",
         title: "Plan mode",
@@ -76,31 +158,7 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
           options.statusText,
           ...(options.hasReadyPlan ? [...IMPLEMENTATION_CONTEXT_LINES, options.implementationOutcome()] : []),
         ],
-        items: options.hasReadyPlan
-          ? [
-              { id: "show", label: "Show latest proposed plan", action: "show" },
-              {
-                id: "implement-here",
-                label: "Implement here",
-                description: "Continue in this session with the planning conversation.",
-                action: "implement-here",
-              },
-              {
-                id: "implement-fresh",
-                label: "Start fresh and implement",
-                description: "Configure one-shot model and thinking choices first.",
-                to: "fresh",
-              },
-              { id: "export", label: "Export plan…", to: "export" },
-              { id: "save", label: "Save for later", action: "save" },
-              { id: "stay", label: "Stay in Plan mode", action: "stay" },
-              { id: "exit", label: "Discard plan and exit", action: "exit" },
-            ]
-          : [
-              { id: "finalize", label: "Request final plan", action: "finalize" },
-              { id: "stay", label: "Stay in Plan mode", action: "stay" },
-              { id: "exit", label: "Exit Plan mode", action: "exit" },
-            ],
+        items: mainMenuItems(options),
         hint: "close",
       }),
       fresh: freshFlow.settingsScreen,
@@ -109,6 +167,21 @@ export async function showPlanModeMenu(ctx: ExtensionContext, options: PlanMenuO
       export: () => planExportInputScreen(options.getExportDestination),
     },
     actions: {
+      "toggle-plan-tool": async ({ itemId, selected, signal }) => {
+        if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
+        const row = itemId ? toolByItemId.get(itemId) : undefined;
+        if (!row) return { kind: "rejected" };
+        if (selected) toolDraft.add(row.name);
+        else toolDraft.delete(row.name);
+        return { kind: "stay" };
+      },
+      "apply-plan-tools": async ({ signal }) => {
+        if (signal.aborted || !options.isCurrent()) return { kind: "rejected" };
+        const add = toolRows.filter((row) => toolDraft.has(row.name) && !row.allowed).map((row) => row.name);
+        const remove = toolRows.filter((row) => !toolDraft.has(row.name) && row.allowed).map((row) => row.name);
+        if (add.length > 0 || remove.length > 0) options.planTools?.apply({ add, remove });
+        return { kind: "close" };
+      },
       show: async () => {
         options.show();
         return { kind: "close" };

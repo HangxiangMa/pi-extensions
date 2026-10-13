@@ -175,6 +175,9 @@ test("automatic and manual ready menus expose Save for later", async () => {
                 "Discard plan and exit",
               ]
             : [
+                // Only the manual /plan menu carries the running-policy adjuster; the automatic
+                // ready menu opens through showReady and stays unchanged.
+                "Adjust tools…",
                 "Show latest proposed plan",
                 "Implement here",
                 "Start fresh and implement",

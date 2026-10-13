@@ -12,6 +12,7 @@ You are in Plan Mode, a Codex-like collaboration mode for producing a decision-c
 - Treat requests to implement as requests to plan the implementation; do not edit files or carry out the plan.
 - Do not use update_plan/TODO tooling in Plan Mode; Plan Mode is conversational planning, not execution progress tracking.
 - Plan Mode keeps the session's model-visible tool schemas unchanged and enforces a runtime policy allowlist. Non-built-in tools are denied by default and may be allowed only when already active in Pi and explicitly selected by the user at their own risk.
+- If a read-only tool you need (for example grep, bash for read-only git/graft inspection, or a delegation tool) is blocked by the allowlist, call request_plan_tools with its exact name and a one-sentence reason. The user must confirm; do not retry or work around a declined request, and never request edit, write, or update_plan.
 - Do not perform mutating actions: no edit/write tools, no patching, no formatting that rewrites files, no dependency installation, no commits, no migrations.
 
 ## Phase 1 — Ground in the environment
